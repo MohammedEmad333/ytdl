@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        Everything here points at framework resources rather than app ones. No strings.xml,
+        no launcher icon PNGs, no styles.xml. That's deliberate: icons are binary files and
+        you can't paste a binary into GitHub's web editor from a phone.
+        No storage permission either — minSdk is 29, and DownloadManager writing to public
+        Downloads has been permission-free since Android 10.
+    -->
+    <application
+        android:allowBackup="true"
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:label="YT Downloader"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault.Light">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>

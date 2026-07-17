@@ -1,0 +1,47 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.example.ytdl'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.example.ytdl'
+        // minSdk 29: from Android 10 up, DownloadManager writes to the public Downloads
+        // folder with no permission at all. Below that you need WRITE_EXTERNAL_STORAGE
+        // plus the runtime request flow — a lot of code for devices nobody has.
+        minSdk 29
+        targetSdk 36
+        versionCode 1
+        versionName '1.0'
+    }
+
+    compileOptions {
+        // Required below minSdk 33 — the extractor uses java.time and java.nio APIs the
+        // old runtimes don't have. It must be the _nio variant of the artifact; plain
+        // desugar_jdk_libs compiles and then fails at runtime.
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        debug {
+            // No R8 on debug, which is also why there's no proguard file here. When you
+            // eventually make a release build you'll need Rhino keep rules, or signature
+            // deobfuscation gets stripped and the app breaks only in release.
+            minifyEnabled false
+        }
+    }
+}
+
+dependencies {
+    implementation 'com.github.teamnewpipe:NewPipeExtractor:v0.26.2'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    // If Gradle can't resolve this, bump the version — it's the one line here I couldn't
+    // verify from my sandbox. Alternatively raise minSdk to 33 and delete both this and
+    // coreLibraryDesugaringEnabled above.
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs_nio:2.1.5'
+}

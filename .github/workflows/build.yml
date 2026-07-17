@@ -1,0 +1,39 @@
+name: Build APK
+
+# No branch filter — GitHub's web editor commits straight to the default branch,
+# whatever it happens to be called.
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # AGP 8.13 needs JDK 17.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Installs cmdline-tools and accepts the SDK licences, so AGP can pull down
+      # platform 36 by itself.
+      - uses: android-actions/setup-android@v3
+
+      # This is the trick that makes a laptop unnecessary: setup-gradle installs Gradle
+      # and puts it on PATH, so there's no ./gradlew and no gradle-wrapper.jar. That jar
+      # is binary, and you can't paste a binary into GitHub's web editor from a phone.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

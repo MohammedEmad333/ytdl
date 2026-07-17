@@ -1,0 +1,7 @@
+// AGP 8.13 rather than 9.x on purpose. AGP 9 makes its new DSL the default and marks
+// the classic one deprecated, and 9.x also switches on built-in Kotlin support — none
+// of which helps a Java project, and all of which is extra to debug from a phone.
+// 8.13 supports compileSdk 36 and pairs with Gradle 8.13.
+plugins {
+    id 'com.android.application' version '8.13.0' apply false
+}
