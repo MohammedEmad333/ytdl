@@ -2,12 +2,19 @@ package com.example.ytdl;
 
 import android.app.Activity;
 import android.app.DownloadManager;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Context;
+import android.media.MediaCodec;
+import android.media.MediaExtractor;
+import android.media.MediaFormat;
+import android.media.MediaMuxer;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
 import android.text.InputType;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -17,7 +24,6 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import org.schabi.newpipe.extractor.MediaFormat;
 import org.schabi.newpipe.extractor.NewPipe;
 import org.schabi.newpipe.extractor.ServiceList;
 import org.schabi.newpipe.extractor.downloader.Downloader;
@@ -30,8 +36,15 @@ import org.schabi.newpipe.extractor.stream.DeliveryMethod;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.stream.VideoStream;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -44,14 +57,21 @@ import okhttp3.RequestBody;
 import okhttp3.ResponseBody;
 
 /**
- * The whole app in one file. Normally the Downloader, the Application subclass and the
- * layout would each live separately — they're folded in here because every extra file is
- * another thing to hand-create in GitHub's web editor on a phone.
+ * The whole app in one file — the Downloader, the muxer and the UI are folded in here
+ * because every extra file is another thing to hand-create in a browser.
+ *
+ * Note the import of android.media.MediaFormat. NewPipe has a MediaFormat class too, so
+ * that one is spelled out in full at every use site. Importing both is a compile error.
  */
 public class MainActivity extends Activity {
 
     private static final String USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0";
+
+    private static final OkHttpClient HTTP = new OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .build();
 
     private static boolean extractorReady = false;
 
@@ -70,9 +90,6 @@ public class MainActivity extends Activity {
     protected void onCreate(final Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // NewPipe.init sets static state, so it only needs to happen once per process.
-        // An Application subclass is the tidy home for this, but that's another file and
-        // another manifest attribute to get wrong.
         if (!extractorReady) {
             NewPipe.init(new OkHttpDownloader(), new Localization("en", "US"));
             extractorReady = true;
@@ -126,6 +143,10 @@ public class MainActivity extends Activity {
         return root;
     }
 
+    private void say(final String message) {
+        main.post(() -> status.setText(message));
+    }
+
     // ---------------------------------------------------------------- extraction
 
     private void fetch(final String url) {
@@ -138,15 +159,12 @@ public class MainActivity extends Activity {
         adapter.clear();
         options.clear();
 
-        // StreamInfo.getInfo does real network I/O — calling it on the UI thread throws
-        // NetworkOnMainThreadException.
         executor.execute(() -> {
             try {
                 final StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, url);
                 main.post(() -> show(info));
             } catch (final Exception e) {
-                main.post(() -> status.setText("Couldn't read that video: "
-                        + e.getMessage()));
+                say("Couldn't read that video: " + e.getMessage());
             }
         });
     }
@@ -156,16 +174,48 @@ public class MainActivity extends Activity {
         status.setText(info.getName() + "\n" + info.getUploaderName()
                 + "\n\nTap a format to save it.");
 
-        // getVideoStreams() is muxed video+audio — one file, directly playable.
-        // getVideoOnlyStreams() has the high resolutions but no sound, and merging those
-        // with an audio track needs ffmpeg. Not attempted here.
+        // The audio track every merged option gets paired with. AAC in an .m4a container,
+        // because that's what MediaMuxer will accept alongside H.264 in an MP4.
+        final AudioStream bestAac = bestAacStream(info);
+
+        // High resolutions live here: video with no audio track at all. Each one gets
+        // merged with bestAac after download.
+        final List<VideoStream> videoOnly = new ArrayList<>();
+        for (final VideoStream vs : info.getVideoOnlyStreams()) {
+            if (vs.getDeliveryMethod() != DeliveryMethod.PROGRESSIVE_HTTP) {
+                continue;
+            }
+            // MPEG-4 only. YouTube also serves WebM/VP9 at these resolutions, but pairing
+            // VP9 with AAC needs a WebM muxer and a different audio choice — two containers
+            // to reason about instead of one, for no visible gain.
+            if (vs.getFormat() != org.schabi.newpipe.extractor.MediaFormat.MPEG_4) {
+                continue;
+            }
+            videoOnly.add(vs);
+        }
+        Collections.sort(videoOnly,
+                (a, b) -> heightOf(b.getResolution()) - heightOf(a.getResolution()));
+
+        if (bestAac != null) {
+            for (final VideoStream vs : videoOnly) {
+                options.add(new Option(
+                        vs.getResolution() + " · merge with audio",
+                        vs.getContent(),
+                        bestAac.getContent(),
+                        "mp4"));
+            }
+        }
+
+        // Muxed: video and audio already in one file. Tops out at 360p on most videos,
+        // occasionally 720p. No merge step, so it goes straight to DownloadManager.
         for (final VideoStream vs : info.getVideoStreams()) {
             if (vs.getDeliveryMethod() != DeliveryMethod.PROGRESSIVE_HTTP) {
                 continue;
             }
             options.add(new Option(
-                    "Video · " + vs.getResolution() + " · " + nameOf(vs.getFormat()),
+                    vs.getResolution() + " · direct, no merge",
                     vs.getContent(),
+                    null,
                     suffixOf(vs.getFormat(), "mp4")));
         }
 
@@ -174,8 +224,10 @@ public class MainActivity extends Activity {
                 continue;
             }
             options.add(new Option(
-                    "Audio · " + as.getAverageBitrate() + " kbps · " + nameOf(as.getFormat()),
+                    "Audio only · " + as.getAverageBitrate() + " kbps · "
+                            + nameOf(as.getFormat()),
                     as.getContent(),
+                    null,
                     suffixOf(as.getFormat(), "m4a")));
         }
 
@@ -191,14 +243,37 @@ public class MainActivity extends Activity {
         adapter.notifyDataSetChanged();
     }
 
+    private static AudioStream bestAacStream(final StreamInfo info) {
+        AudioStream best = null;
+        for (final AudioStream as : info.getAudioStreams()) {
+            if (as.getDeliveryMethod() != DeliveryMethod.PROGRESSIVE_HTTP) {
+                continue;
+            }
+            if (as.getFormat() != org.schabi.newpipe.extractor.MediaFormat.M4A) {
+                continue;
+            }
+            if (best == null || as.getAverageBitrate() > best.getAverageBitrate()) {
+                best = as;
+            }
+        }
+        return best;
+    }
+
     // ---------------------------------------------------------------- download
 
     private void download(final Option option) {
-        final DownloadManager.Request request =
-                new DownloadManager.Request(Uri.parse(option.url));
+        if (option.audioUrl == null) {
+            downloadDirect(option);
+        } else {
+            executor.execute(() -> downloadAndMerge(option));
+        }
+    }
 
-        // Same UA the extractor used to resolve the URL. YouTube's CDN can reject the
-        // transfer otherwise.
+    /** Single file, nothing to combine — hand it to the system and forget about it. */
+    private void downloadDirect(final Option option) {
+        final DownloadManager.Request request =
+                new DownloadManager.Request(Uri.parse(option.videoUrl));
+
         request.addRequestHeader("User-Agent", USER_AGENT);
         request.setTitle(videoTitle);
         request.setNotificationVisibility(
@@ -213,30 +288,259 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "Saving to Downloads", Toast.LENGTH_SHORT).show();
     }
 
+    /**
+     * Two downloads and a mux. This runs on the activity's executor rather than in a
+     * foreground service, which means backgrounding the app kills it. Fine for tap-and-wait;
+     * if that starts annoying you, a foreground service is the fix.
+     */
+    private void downloadAndMerge(final Option option) {
+        final File video = new File(getCacheDir(), "video.part");
+        final File audio = new File(getCacheDir(), "audio.part");
+        final File merged = new File(getCacheDir(), "merged.mp4");
+
+        try {
+            fetchToFile(option.videoUrl, video, "Video");
+            fetchToFile(option.audioUrl, audio, "Audio");
+
+            say("Merging…");
+            mux(video, audio, merged);
+
+            say("Saving…");
+            saveToDownloads(merged, videoTitle + ".mp4");
+
+            say("Saved " + videoTitle + ".mp4 to Downloads.");
+            main.post(() -> Toast.makeText(this, "Done", Toast.LENGTH_SHORT).show());
+        } catch (final Exception e) {
+            say("Failed: " + e.getMessage());
+        } finally {
+            video.delete();
+            audio.delete();
+            merged.delete();
+        }
+    }
+
+    private void fetchToFile(final String url, final File dest, final String label)
+            throws IOException {
+        final okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(url)
+                .addHeader("User-Agent", USER_AGENT)
+                .build();
+
+        try (okhttp3.Response response = HTTP.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw new IOException(label + " download returned HTTP " + response.code());
+            }
+            final ResponseBody body = response.body();
+            if (body == null) {
+                throw new IOException(label + " download returned an empty body");
+            }
+
+            final long total = body.contentLength();
+            long done = 0;
+            int lastShown = -1;
+
+            try (InputStream in = body.byteStream();
+                 OutputStream out = new FileOutputStream(dest)) {
+                final byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = in.read(buffer)) > 0) {
+                    out.write(buffer, 0, read);
+                    done += read;
+
+                    if (total > 0) {
+                        final int percent = (int) (done * 100 / total);
+                        // Throttled: setText on every 64KB chunk would flood the main thread.
+                        if (percent != lastShown && percent % 2 == 0) {
+                            lastShown = percent;
+                            say(label + " " + percent + "%");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- muxing
+
+    /**
+     * Copies the compressed video and audio samples into one MP4. No decoding, no
+     * re-encoding — the bytes are lifted straight across, so a 1080p merge takes a second
+     * or two and loses nothing. This is why ffmpeg isn't needed.
+     */
+    private static void mux(final File videoFile, final File audioFile, final File output)
+            throws IOException {
+
+        final MediaExtractor videoExtractor = new MediaExtractor();
+        final MediaExtractor audioExtractor = new MediaExtractor();
+        MediaMuxer muxer = null;
+
+        try {
+            videoExtractor.setDataSource(videoFile.getAbsolutePath());
+            audioExtractor.setDataSource(audioFile.getAbsolutePath());
+
+            final int videoTrack = firstTrack(videoExtractor, "video/");
+            final int audioTrack = firstTrack(audioExtractor, "audio/");
+            if (videoTrack < 0 || audioTrack < 0) {
+                throw new IOException("Couldn't find both a video and an audio track");
+            }
+
+            videoExtractor.selectTrack(videoTrack);
+            audioExtractor.selectTrack(audioTrack);
+
+            final MediaFormat videoFormat = videoExtractor.getTrackFormat(videoTrack);
+            final MediaFormat audioFormat = audioExtractor.getTrackFormat(audioTrack);
+
+            muxer = new MediaMuxer(output.getAbsolutePath(),
+                    MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+
+            // Throws if the codec can't live in an MP4 — surface that rather than writing
+            // a broken file.
+            final int outVideo = muxer.addTrack(videoFormat);
+            final int outAudio = muxer.addTrack(audioFormat);
+
+            if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
+                muxer.setOrientationHint(videoFormat.getInteger(MediaFormat.KEY_ROTATION));
+            }
+
+            muxer.start();
+
+            final ByteBuffer buffer = ByteBuffer.allocate(
+                    Math.max(bufferSizeFor(videoFormat), bufferSizeFor(audioFormat)));
+            final MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+
+            copyTrack(videoExtractor, muxer, outVideo, buffer, info);
+            copyTrack(audioExtractor, muxer, outAudio, buffer, info);
+
+            muxer.stop();
+        } finally {
+            if (muxer != null) {
+                try {
+                    muxer.release();
+                } catch (final Exception ignored) {
+                    // release() after a failed stop() throws; the real error matters more.
+                }
+            }
+            videoExtractor.release();
+            audioExtractor.release();
+        }
+    }
+
+    private static void copyTrack(final MediaExtractor extractor, final MediaMuxer muxer,
+                                  final int trackIndex, final ByteBuffer buffer,
+                                  final MediaCodec.BufferInfo info) {
+        while (true) {
+            final int size = extractor.readSampleData(buffer, 0);
+            if (size < 0) {
+                break;
+            }
+            info.offset = 0;
+            info.size = size;
+            info.presentationTimeUs = extractor.getSampleTime();
+            // MediaExtractor and MediaCodec use different flag constants for the same idea,
+            // so translate rather than passing the raw value through.
+            info.flags = (extractor.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0
+                    ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
+
+            muxer.writeSampleData(trackIndex, buffer, info);
+            extractor.advance();
+        }
+    }
+
+    private static int firstTrack(final MediaExtractor extractor, final String prefix) {
+        for (int i = 0; i < extractor.getTrackCount(); i++) {
+            final String mime = extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME);
+            if (mime != null && mime.startsWith(prefix)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** readSampleData throws if the buffer can't hold a whole sample — 4K keyframes are big. */
+    private static int bufferSizeFor(final MediaFormat format) {
+        final int floor = 1024 * 1024;
+        if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+            return Math.max(floor, format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE));
+        }
+        return floor;
+    }
+
+    // ---------------------------------------------------------------- saving
+
+    /**
+     * DownloadManager isn't involved in the merged path, so the finished file has to be
+     * published by hand. IS_PENDING hides it from the gallery until the copy is complete.
+     */
+    private void saveToDownloads(final File source, final String displayName)
+            throws IOException {
+
+        final ContentResolver resolver = getContentResolver();
+        final ContentValues values = new ContentValues();
+        values.put(MediaStore.Downloads.DISPLAY_NAME, displayName);
+        values.put(MediaStore.Downloads.MIME_TYPE, "video/mp4");
+        values.put(MediaStore.Downloads.IS_PENDING, 1);
+
+        final Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+        if (uri == null) {
+            throw new IOException("MediaStore wouldn't accept the file");
+        }
+
+        try (InputStream in = new FileInputStream(source);
+             OutputStream out = resolver.openOutputStream(uri)) {
+            if (out == null) {
+                throw new IOException("Couldn't open the destination for writing");
+            }
+            final byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = in.read(buffer)) > 0) {
+                out.write(buffer, 0, read);
+            }
+        }
+
+        values.clear();
+        values.put(MediaStore.Downloads.IS_PENDING, 0);
+        resolver.update(uri, values, null, null);
+    }
+
     // ---------------------------------------------------------------- helpers
 
-    /** One downloadable stream, flattened to what DownloadManager needs. */
+    /** One entry in the format list. A non-null audioUrl means it needs merging. */
     private static final class Option {
         final String label;
-        final String url;
+        final String videoUrl;
+        final String audioUrl;
         final String extension;
 
-        Option(final String label, final String url, final String extension) {
+        Option(final String label, final String videoUrl, final String audioUrl,
+               final String extension) {
             this.label = label;
-            this.url = url;
+            this.videoUrl = videoUrl;
+            this.audioUrl = audioUrl;
             this.extension = extension;
         }
     }
 
-    private static String nameOf(final MediaFormat format) {
+    /** "1080p60" -> 1080, for sorting. */
+    private static int heightOf(final String resolution) {
+        if (resolution == null) {
+            return 0;
+        }
+        int end = 0;
+        while (end < resolution.length() && Character.isDigit(resolution.charAt(end))) {
+            end++;
+        }
+        return end == 0 ? 0 : Integer.parseInt(resolution.substring(0, end));
+    }
+
+    private static String nameOf(final org.schabi.newpipe.extractor.MediaFormat format) {
         return format == null ? "unknown" : format.getName();
     }
 
-    private static String suffixOf(final MediaFormat format, final String fallback) {
+    private static String suffixOf(final org.schabi.newpipe.extractor.MediaFormat format,
+                                   final String fallback) {
         return format == null ? fallback : format.getSuffix();
     }
 
-    /** Video titles routinely contain characters that are illegal in filenames. */
     private static String sanitize(final String name) {
         final String cleaned = name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
         if (cleaned.isEmpty()) {
@@ -253,11 +557,6 @@ public class MainActivity extends Activity {
      */
     private static final class OkHttpDownloader extends Downloader {
 
-        private final OkHttpClient client = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .build();
-
         @Override
         public Response execute(final Request request) throws IOException, ReCaptchaException {
             final byte[] dataToSend = request.dataToSend();
@@ -272,8 +571,6 @@ public class MainActivity extends Activity {
                     .url(request.url())
                     .addHeader("User-Agent", USER_AGENT);
 
-            // Headers arrive as a multimap — a name can legitimately repeat, so clear then
-            // re-add rather than using header() and silently dropping values.
             for (final Map.Entry<String, List<String>> pair : request.headers().entrySet()) {
                 builder.removeHeader(pair.getKey());
                 for (final String value : pair.getValue()) {
@@ -281,10 +578,8 @@ public class MainActivity extends Activity {
                 }
             }
 
-            final okhttp3.Response response = client.newCall(builder.build()).execute();
+            final okhttp3.Response response = HTTP.newCall(builder.build()).execute();
 
-            // 429 means YouTube wants a captcha. The extractor has a dedicated exception so
-            // callers can tell "rate limited" apart from "genuinely broken".
             if (response.code() == 429) {
                 response.close();
                 throw new ReCaptchaException("reCaptcha challenge requested", request.url());

@@ -25,16 +25,28 @@ Versions, since you can't easily check these from a phone: AGP 8.13.0 with Gradl
 (that pairing is from Google's own compatibility table), compileSdk 36, JDK 17.
 NewPipeExtractor v0.26.2 is the current release as of May 2026.
 
+## How the quality list works
+
+YouTube serves two kinds of streams, and the list mixes both:
+
+- **`1080p · merge with audio`** — DASH video-only. These carry no sound, so the app
+  downloads the video track and the best AAC audio track separately, then merges them.
+  This is where every resolution above 720p lives.
+- **`360p · direct, no merge`** — muxed, video and audio already in one file. Tops out at
+  360p on almost everything now, occasionally 720p. Goes straight to DownloadManager.
+- **`Audio only`** — the audio track by itself, at full quality.
+
+The merge uses `MediaMuxer`, which is part of the Android framework. It's a remux, not a
+re-encode: the compressed H.264 and AAC samples are copied into a new MP4 container
+untouched. Takes a second or two and loses nothing. This is why there's no ffmpeg
+dependency — FFmpegKit was retired in 2025 and pulled from the repos, but transcoding was
+never actually needed for this.
+
+Only MPEG-4 video is offered for merging. YouTube also serves WebM/VP9 at the same
+resolutions, but pairing VP9 with AAC needs a WebM muxer and a different audio choice —
+two containers to reason about instead of one, for no visible difference.
+
 ## Read this before you're disappointed by the output
-
-**360p is the ceiling, and that's not a bug.** YouTube serves two kinds of streams. Muxed
-(video and audio in one file) tops out at 360p on almost everything now, occasionally 720p.
-Everything above is DASH: video-only and audio-only as separate files. This app lists muxed
-video and standalone audio, so both download as single playable files.
-
-1080p means downloading two streams and muxing them. The usual Android answer for that,
-FFmpegKit, was retired by its maintainer in 2025 and pulled from the repos. Community forks
-exist, but it's a genuine project, not an afternoon.
 
 **Some videos will fail** with "Sign in to confirm you're not a bot." That's YouTube's
 integrity check. poTokens are the workaround — the extractor accepts them but doesn't
@@ -47,7 +59,9 @@ letting Actions rebuild — which you can do from a phone in about thirty second
 
 ## Known limits
 
-- Muxed video and audio-only. No DASH, no HLS, no live streams.
+- MPEG-4 video only for merging. No WebM/VP9, no HLS, no live streams.
+- Merging runs on the activity's executor, not a foreground service — leaving the app
+  mid-download cancels it. Direct downloads go through DownloadManager and survive it.
 - No playlists, no queue.
 - Debug signing. If you switch on `minifyEnabled` for a release build later, you need
   ProGuard keep rules for Rhino or signature deobfuscation gets stripped and the app
