@@ -32,6 +32,7 @@ import org.schabi.newpipe.extractor.downloader.Response;
 import org.schabi.newpipe.extractor.exceptions.ReCaptchaException;
 import org.schabi.newpipe.extractor.localization.Localization;
 import org.schabi.newpipe.extractor.stream.AudioStream;
+import org.schabi.newpipe.extractor.stream.AudioTrackType;
 import org.schabi.newpipe.extractor.stream.DeliveryMethod;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.stream.VideoStream;
@@ -46,6 +47,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -72,6 +74,15 @@ public class MainActivity extends Activity {
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .build();
+
+    /**
+     * YouTube throttles a single long-lived GET on a stream URL to about playback speed —
+     * the point is to stop a player buffering the whole video, and a downloader eats the
+     * same limit. Each new ranged request gets a fresh budget, so the fix is to never ask
+     * for very much at once. Smaller means more resets but more request overhead; 4 MB is
+     * a reasonable middle. Tune it if you're curious.
+     */
+    private static final long CHUNK_BYTES = 4L * 1024 * 1024;
 
     private static boolean extractorReady = false;
 
@@ -171,12 +182,22 @@ public class MainActivity extends Activity {
 
     private void show(final StreamInfo info) {
         videoTitle = sanitize(info.getName());
-        status.setText(info.getName() + "\n" + info.getUploaderName()
-                + "\n\nTap a format to save it.");
 
         // The audio track every merged option gets paired with. AAC in an .m4a container,
         // because that's what MediaMuxer will accept alongside H.264 in an MP4.
         final AudioStream bestAac = bestAacStream(info);
+
+        final StringBuilder header = new StringBuilder()
+                .append(info.getName()).append('\n')
+                .append(info.getUploaderName());
+        if (bestAac != null) {
+            final String track = trackLabel(bestAac);
+            header.append("\n\nMerges use: ")
+                    .append(track.isEmpty() ? "the only audio track" : track)
+                    .append(" · ").append(bestAac.getAverageBitrate()).append(" kbps");
+        }
+        header.append("\n\nTap a format to save it.");
+        status.setText(header.toString());
 
         // High resolutions live here: video with no audio track at all. Each one gets
         // merged with bestAac after download.
@@ -223,9 +244,11 @@ public class MainActivity extends Activity {
             if (as.getDeliveryMethod() != DeliveryMethod.PROGRESSIVE_HTTP) {
                 continue;
             }
+            final String track = trackLabel(as);
             options.add(new Option(
                     "Audio only · " + as.getAverageBitrate() + " kbps · "
-                            + nameOf(as.getFormat()),
+                            + nameOf(as.getFormat())
+                            + (track.isEmpty() ? "" : " · " + track),
                     as.getContent(),
                     null,
                     suffixOf(as.getFormat(), "m4a")));
@@ -252,11 +275,36 @@ public class MainActivity extends Activity {
             if (as.getFormat() != org.schabi.newpipe.extractor.MediaFormat.M4A) {
                 continue;
             }
-            if (best == null || as.getAverageBitrate() > best.getAverageBitrate()) {
+            if (best == null || rank(as) > rank(best)) {
                 best = as;
             }
         }
         return best;
+    }
+
+    /**
+     * Bitrate alone isn't enough. YouTube now ships dubbed audio tracks alongside the
+     * original, often at identical bitrates, so ranking on kbps would pick whichever
+     * happened to come first in the list — a coin flip between English and a dub. The
+     * original wins outright here; bitrate only breaks ties within a track type.
+     */
+    private static long rank(final AudioStream stream) {
+        final AudioTrackType type = stream.getAudioTrackType();
+        final long originalBonus = type == AudioTrackType.ORIGINAL ? 1_000_000L : 0L;
+        return originalBonus + Math.max(0, stream.getAverageBitrate());
+    }
+
+    /** Distinguishes the otherwise-identical audio entries in the list. */
+    private static String trackLabel(final AudioStream stream) {
+        final String name = stream.getAudioTrackName();
+        if (name != null && !name.isEmpty()) {
+            return name;
+        }
+        final Locale locale = stream.getAudioLocale();
+        if (locale != null) {
+            return locale.getDisplayName();
+        }
+        return "";
     }
 
     // ---------------------------------------------------------------- download
@@ -321,43 +369,83 @@ public class MainActivity extends Activity {
 
     private void fetchToFile(final String url, final File dest, final String label)
             throws IOException {
-        final okhttp3.Request request = new okhttp3.Request.Builder()
-                .url(url)
-                .addHeader("User-Agent", USER_AGENT)
-                .build();
 
-        try (okhttp3.Response response = HTTP.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                throw new IOException(label + " download returned HTTP " + response.code());
-            }
-            final ResponseBody body = response.body();
-            if (body == null) {
-                throw new IOException(label + " download returned an empty body");
-            }
+        long total = -1;
+        long written = 0;
+        int lastShown = -1;
 
-            final long total = body.contentLength();
-            long done = 0;
-            int lastShown = -1;
+        try (OutputStream out = new FileOutputStream(dest)) {
+            while (total < 0 || written < total) {
+                final long chunkStart = written;
 
-            try (InputStream in = body.byteStream();
-                 OutputStream out = new FileOutputStream(dest)) {
-                final byte[] buffer = new byte[64 * 1024];
-                int read;
-                while ((read = in.read(buffer)) > 0) {
-                    out.write(buffer, 0, read);
-                    done += read;
+                final okhttp3.Request request = new okhttp3.Request.Builder()
+                        .url(url)
+                        .addHeader("User-Agent", USER_AGENT)
+                        .addHeader("Range", "bytes=" + chunkStart + "-"
+                                + (chunkStart + CHUNK_BYTES - 1))
+                        .build();
 
-                    if (total > 0) {
-                        final int percent = (int) (done * 100 / total);
-                        // Throttled: setText on every 64KB chunk would flood the main thread.
-                        if (percent != lastShown && percent % 2 == 0) {
-                            lastShown = percent;
-                            say(label + " " + percent + "%");
+                try (okhttp3.Response response = HTTP.newCall(request).execute()) {
+                    final int code = response.code();
+                    if (code != 200 && code != 206) {
+                        throw new IOException(label + " download returned HTTP " + code);
+                    }
+                    final ResponseBody body = response.body();
+                    if (body == null) {
+                        throw new IOException(label + " download returned an empty body");
+                    }
+
+                    if (total < 0) {
+                        total = totalLength(response.header("Content-Range"),
+                                body.contentLength());
+                    }
+
+                    try (InputStream in = body.byteStream()) {
+                        final byte[] buffer = new byte[64 * 1024];
+                        int read;
+                        while ((read = in.read(buffer)) > 0) {
+                            out.write(buffer, 0, read);
+                            written += read;
+
+                            if (total > 0) {
+                                final int percent = (int) (written * 100 / total);
+                                // Throttled: setText per 64KB chunk would flood the main thread.
+                                if (percent != lastShown && percent % 2 == 0) {
+                                    lastShown = percent;
+                                    say(label + " " + percent + "%");
+                                }
+                            }
                         }
                     }
+
+                    // 200 rather than 206 means the server ignored the Range header and
+                    // sent the lot — we already have everything.
+                    if (code == 200) {
+                        break;
+                    }
+                }
+
+                // Without this, a chunk that yields nothing loops forever.
+                if (written == chunkStart) {
+                    throw new IOException(label + " download stalled at " + written + " bytes");
                 }
             }
         }
+    }
+
+    /** Content-Range comes back as "bytes 0-4194303/52428800" — the tail is what we want. */
+    private static long totalLength(final String contentRange, final long bodyLength) {
+        if (contentRange != null) {
+            final int slash = contentRange.indexOf('/');
+            if (slash >= 0) {
+                try {
+                    return Long.parseLong(contentRange.substring(slash + 1).trim());
+                } catch (final NumberFormatException ignored) {
+                    // Unparseable — fall back to the body length below.
+                }
+            }
+        }
+        return bodyLength;
     }
 
     // ---------------------------------------------------------------- muxing

@@ -68,3 +68,23 @@ letting Actions rebuild — which you can do from a phone in about thirty second
   ProGuard keep rules for Rhino or signature deobfuscation gets stripped and the app
   breaks in release only.
 - Sideload only. Play's Developer Program Policy bans apps that download YouTube content.
+
+## Why downloads are chunked
+
+YouTube throttles a single long-lived GET on a stream URL down to roughly playback speed.
+The intent is to stop a player buffering an entire video ahead of itself; a downloader eats
+the same limit, and no amount of local bandwidth helps because the cap is applied at the
+far end. So `fetchToFile` requests the file in 4 MB ranges instead of asking for all of it
+at once — each request gets a fresh budget. It's the same trick yt-dlp uses.
+
+If it's still slow, the next lever is fetching several ranges in parallel rather than one
+after another. That needs a `RandomAccessFile` and seeks instead of a plain append, which
+is why it isn't here yet.
+
+## Audio track selection
+
+YouTube ships dubbed audio tracks alongside the original, frequently at identical bitrates.
+Ranking candidates on kbps alone would pick whichever the extractor happened to list first —
+a coin flip between the original and a dub. `rank()` therefore treats `AudioTrackType.ORIGINAL`
+as decisive and uses bitrate only to break ties. Whichever track merges will use is printed
+above the format list, so a wrong guess is visible before you download 200 MB.
