@@ -23,7 +23,8 @@ survives being typed into a browser.
 
 Versions, since you can't easily check these from a phone: AGP 8.13.0 with Gradle 8.13
 (that pairing is from Google's own compatibility table), compileSdk 36, JDK 17.
-NewPipeExtractor v0.26.2 is the current release as of May 2026.
+NewPipeExtractor v0.26.3 (June 2026) — v0.26.2 and earlier hit YouTube's SABR
+enforcement and return only a 360p muxed stream, with no adaptive formats at all.
 
 ## How the quality list works
 
