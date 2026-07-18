@@ -751,8 +751,17 @@ public class MainActivity extends Activity {
             audioSpinner.setSelection(0);
         }
 
-        status.setText(info.getName() + "\n" + info.getUploaderName()
-                + (audioTracks.isEmpty() ? "" : "\n\nAudio for merges ↓"));
+        final StringBuilder header = new StringBuilder(info.getName())
+                .append('\n').append(info.getUploaderName());
+        if (audioTracks.isEmpty()) {
+            // No audio means no merges, so the list collapses to whatever muxed stream
+            // exists. That looks identical whether YouTube withheld the formats or these
+            // filters dropped them, and the two need opposite fixes.
+            header.append("\n\n").append(Streams.diagnostics(info));
+        } else {
+            header.append("\n\nAudio for merges ↓");
+        }
+        status.setText(header.toString());
 
         // Merged size is the video plus the audio it'll be paired with, so the number in
         // the list is what actually lands on disk rather than half of it.

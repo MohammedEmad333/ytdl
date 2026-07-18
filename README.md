@@ -61,6 +61,14 @@ two containers to reason about instead of one, for no visible difference.
 
 ## Read this before you're disappointed by the output
 
+**Some videos show only the muxed 360p** while others on the same build offer 1080p60. When
+that happens the status line prints a diagnostic instead of the audio picker, reading
+`usable/sent`. It exists because there are two causes with opposite fixes and no way to tell
+them apart by looking: either YouTube sent no adaptive formats — the poToken wall, which
+rolls out per video — or it sent them and `Streams` filtered them out, most likely because
+they're delivered as DASH manifests rather than progressive HTTP. `sent` being 0 means it
+isn't this app's doing. `sent` healthy with `usable` at 0 means it is.
+
 **Some videos will fail** with "Sign in to confirm you're not a bot." That's YouTube's
 integrity check. poTokens are the workaround — the extractor accepts them but doesn't
 generate them, and generating one means running YouTube's own JS in a WebView. NewPipe
