@@ -2,7 +2,6 @@ package com.example.ytdl;
 
 import org.json.JSONObject;
 
-import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.MediaType;
@@ -94,7 +93,10 @@ public final class PoToken {
                 final String token = parsed.optString("po_token", "");
                 return token.isEmpty() ? null : token;
             }
-        } catch (final IOException | RuntimeException e) {
+        } catch (final Exception e) {
+            // JSONException is checked and extends Exception (not RuntimeException), so it
+            // has to be caught here alongside IO and runtime failures. Any failure means
+            // "no token", which the caller already treats as "server didn't help".
             return null;
         }
     }
