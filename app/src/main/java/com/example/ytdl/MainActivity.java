@@ -11,8 +11,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.view.GestureDetector;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
@@ -123,7 +126,7 @@ public class MainActivity extends Activity {
         fetchPane = buildFetchPane();
         queuePane = buildQueuePane();
 
-        final FrameLayout content = new FrameLayout(this);
+        final SwipePager content = new SwipePager(this);
         content.addView(fetchPane);
         content.addView(queuePane);
         root.addView(content, new LinearLayout.LayoutParams(
@@ -132,8 +135,66 @@ public class MainActivity extends Activity {
         return root;
     }
 
+    /**
+     * Horizontal flings switch tabs.
+     *
+     * The detector is fed from dispatchTouchEvent and never consumes anything — it only
+     * watches. Intercepting would mean fighting the ListViews for the gesture, and a
+     * ListView calls requestDisallowInterceptTouchEvent the moment it starts scrolling, so
+     * an interception-based version drops swipes that begin on a scrolled list. Observing
+     * sidesteps the argument entirely: vertical flings are ignored by the angle check, and
+     * ListView has no use for horizontal ones.
+     */
+    private final class SwipePager extends FrameLayout {
+
+        private final GestureDetector detector;
+
+        SwipePager(final Context context) {
+            super(context);
+            final float minVelocity = ViewConfiguration.get(context)
+                    .getScaledMinimumFlingVelocity() * 1.5f;
+
+            detector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
+                @Override
+                public boolean onFling(final MotionEvent down, final MotionEvent up,
+                                       final float vx, final float vy) {
+                    // down is nullable from API 33, and a fling with no start isn't one.
+                    if (down == null || up == null) {
+                        return false;
+                    }
+                    if (Math.abs(vx) < minVelocity || Math.abs(vx) < Math.abs(vy) * 1.5f) {
+                        return false;
+                    }
+                    // Left drags the next tab in; right drags the previous one back.
+                    animateTo(vx < 0);
+                    return true;
+                }
+            });
+        }
+
+        @Override
+        public boolean dispatchTouchEvent(final MotionEvent event) {
+            detector.onTouchEvent(event);
+            return super.dispatchTouchEvent(event);
+        }
+    }
+
+    private void animateTo(final boolean toQueue) {
+        final boolean showingQueue = queuePane.getVisibility() == View.VISIBLE;
+        if (showingQueue == toQueue) {
+            return;
+        }
+
+        selectTab(!toQueue);
+
+        final View incoming = toQueue ? queuePane : fetchPane;
+        final int width = incoming.getWidth() > 0 ? incoming.getWidth() : Ui.dp(this, 320);
+        incoming.setTranslationX(toQueue ? width : -width);
+        incoming.animate().translationX(0).setDuration(170).start();
+    }
+
     private View buildHeader() {
-        final TextView title = Ui.mono(this, 11, Ui.MUTED);
+        final TextView title = Ui.mono(this, 12, Ui.MUTED);
         title.setText("YT DOWNLOADER");
         title.setLetterSpacing(0.24f);
         title.setPadding(Ui.dp(this, 20), Ui.dp(this, 18), Ui.dp(this, 20), Ui.dp(this, 14));
@@ -168,7 +229,7 @@ public class MainActivity extends Activity {
     }
 
     private TextView tabLabel(final String text, final boolean fetch) {
-        final TextView t = Ui.mono(this, 12, Ui.MUTED);
+        final TextView t = Ui.mono(this, 13, Ui.MUTED);
         t.setText(text);
         t.setLetterSpacing(0.12f);
         t.setGravity(Gravity.CENTER);
@@ -200,7 +261,7 @@ public class MainActivity extends Activity {
         urlInput.setHint("youtube.com/watch?v=…");
         urlInput.setHintTextColor(Ui.MUTED);
         urlInput.setTextColor(Ui.TEXT);
-        urlInput.setTextSize(13);
+        urlInput.setTextSize(Ui.size(14));
         urlInput.setTypeface(Typeface.MONOSPACE);
         urlInput.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
         urlInput.setMaxLines(2);
@@ -211,7 +272,7 @@ public class MainActivity extends Activity {
         final Button fetch = new Button(this);
         fetch.setText("FETCH");
         fetch.setTextColor(Ui.BG);
-        fetch.setTextSize(12);
+        fetch.setTextSize(Ui.size(14));
         fetch.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         fetch.setLetterSpacing(0.12f);
         fetch.setAllCaps(false);
@@ -223,7 +284,7 @@ public class MainActivity extends Activity {
         fetchParams.topMargin = Ui.dp(this, 10);
         root.addView(fetch, fetchParams);
 
-        status = Ui.sans(this, 13, Ui.MUTED);
+        status = Ui.sans(this, 14, Ui.MUTED);
         status.setText("Paste a YouTube link above, then tap Fetch.");
         status.setLineSpacing(Ui.dp(this, 3), 1f);
         status.setPadding(0, Ui.dp(this, 16), 0, Ui.dp(this, 4));
@@ -241,7 +302,7 @@ public class MainActivity extends Activity {
                 final TextView v = (TextView) super.getView(position, convertView, parent);
                 v.setTextColor(Ui.TEXT);
                 v.setTypeface(Typeface.MONOSPACE);
-                v.setTextSize(12);
+                v.setTextSize(Ui.size(13));
                 return v;
             }
         };
@@ -295,12 +356,12 @@ public class MainActivity extends Activity {
 
             final Option option = options.get(position);
 
-            final TextView primary = Ui.mono(c, 15, Ui.TEXT);
+            final TextView primary = Ui.mono(c, 17, Ui.TEXT);
             primary.setText(option.primary);
             primary.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
             row.addView(primary);
 
-            final TextView detail = Ui.mono(c, 11, Ui.MUTED);
+            final TextView detail = Ui.mono(c, 12, Ui.MUTED);
             detail.setText(option.detail);
             detail.setPadding(0, Ui.dp(c, 3), 0, 0);
             row.addView(detail);
@@ -337,7 +398,7 @@ public class MainActivity extends Activity {
         clear.setText("Clear finished");
         clear.setAllCaps(false);
         clear.setTextColor(Ui.MUTED);
-        clear.setTextSize(12);
+        clear.setTextSize(Ui.size(13));
         clear.setTypeface(Typeface.MONOSPACE);
         clear.setStateListAnimator(null);
         clear.setBackground(Ui.box(this, Color.TRANSPARENT, Ui.LINE, 6));
@@ -378,7 +439,7 @@ public class MainActivity extends Activity {
             final Context c = MainActivity.this;
 
             if (queueSnapshot.isEmpty()) {
-                final TextView empty = Ui.sans(c, 13, Ui.MUTED);
+                final TextView empty = Ui.sans(c, 14, Ui.MUTED);
                 empty.setText("Nothing queued.\nPick a format on the Fetch tab.");
                 empty.setPadding(Ui.dp(c, 4), Ui.dp(c, 24), 0, 0);
                 return empty;
@@ -391,13 +452,13 @@ public class MainActivity extends Activity {
             card.setBackground(Ui.box(c, Ui.SURFACE, Ui.LINE, 6));
             card.setPadding(Ui.dp(c, 14), Ui.dp(c, 12), Ui.dp(c, 14), Ui.dp(c, 12));
 
-            final TextView title = Ui.sans(c, 13, Ui.TEXT);
+            final TextView title = Ui.sans(c, 14, Ui.TEXT);
             title.setText(task.title);
             title.setMaxLines(1);
             title.setEllipsize(android.text.TextUtils.TruncateAt.END);
             card.addView(title);
 
-            final TextView meta = Ui.mono(c, 11, stateColor(task.state));
+            final TextView meta = Ui.mono(c, 12, stateColor(task.state));
             meta.setText(metaLine(task));
             meta.setPadding(0, Ui.dp(c, 4), 0, Ui.dp(c, 10));
             card.addView(meta);
@@ -467,7 +528,7 @@ public class MainActivity extends Activity {
 
     private View smallButton(final Context c, final String text, final int color,
                              final View.OnClickListener click) {
-        final TextView b = Ui.mono(c, 11, color);
+        final TextView b = Ui.mono(c, 12, color);
         b.setText(text);
         b.setGravity(Gravity.CENTER);
         b.setPadding(Ui.dp(c, 14), Ui.dp(c, 7), Ui.dp(c, 14), Ui.dp(c, 7));
@@ -712,8 +773,16 @@ public class MainActivity extends Activity {
 
         final AudioTrackType type = stream.getAudioTrackType();
         final String kind = type == null ? "untagged" : type.name().toLowerCase(Locale.US);
+        final String rate = " · " + stream.getAverageBitrate() + " kbps";
 
-        return who + " (" + kind + ") · " + stream.getAverageBitrate() + " kbps";
+        // YouTube's track names frequently already contain the word — "English (US) original"
+        // becoming "English (US) original (original)" is just a stutter. Only add the marker
+        // when it says something the name doesn't, which is exactly when it matters most:
+        // an untagged track the ranking couldn't reason about.
+        if (who.toLowerCase(Locale.US).contains(kind)) {
+            return who + rate;
+        }
+        return who + " (" + kind + ")" + rate;
     }
 
     /** "1080p60" -> 1080, for sorting. */

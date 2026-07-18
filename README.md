@@ -108,6 +108,15 @@ special case.
 Custom fonts are the obvious next lever and are deliberately absent: font files are binary.
 Monospace is a system face, which is why it carries the personality here.
 
+Every text size multiplies through `Ui.TYPE_SCALE`, so adjusting the whole scale is one
+number rather than thirty scattered edits.
+
+Tabs switch by horizontal fling as well as by tapping. The gesture detector is fed from
+`dispatchTouchEvent` and never consumes anything — it only watches. Intercepting would mean
+fighting the ListViews for the gesture, and a ListView calls `requestDisallowInterceptTouchEvent`
+as soon as it starts scrolling, so an interception-based version drops swipes that begin on a
+scrolled list.
+
 The launcher icon is an adaptive icon whose layers are vectors rather than the usual PNG set,
 for the same reason. A play triangle turned to point down over a bar: a play button one way, a
 download arrow hitting a floor the other.

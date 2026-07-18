@@ -37,6 +37,16 @@ public final class Ui {
     public static final int OK = Color.parseColor("#4FB477");
     public static final int ERR = Color.parseColor("#E5534B");
 
+    /**
+     * One knob for the whole type scale. Every text size in the app multiplies through here,
+     * so "make it bigger" is one number rather than thirty edits scattered across two files.
+     */
+    public static final float TYPE_SCALE = 1.15f;
+
+    public static float size(final float baseSp) {
+        return baseSp * TYPE_SCALE;
+    }
+
     private Ui() {
     }
 
@@ -76,7 +86,7 @@ public final class Ui {
     public static TextView mono(final Context context, final float sizeSp, final int color) {
         final TextView t = new TextView(context);
         t.setTypeface(android.graphics.Typeface.MONOSPACE);
-        t.setTextSize(sizeSp);
+        t.setTextSize(size(sizeSp));
         t.setTextColor(color);
         return t;
     }
@@ -84,7 +94,7 @@ public final class Ui {
     /** Prose: titles, uploader names, instructions. */
     public static TextView sans(final Context context, final float sizeSp, final int color) {
         final TextView t = new TextView(context);
-        t.setTextSize(sizeSp);
+        t.setTextSize(size(sizeSp));
         t.setTextColor(color);
         return t;
     }
