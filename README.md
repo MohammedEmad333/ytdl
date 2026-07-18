@@ -84,7 +84,15 @@ is why it isn't here yet.
 ## Audio track selection
 
 YouTube ships dubbed audio tracks alongside the original, frequently at identical bitrates.
-Ranking candidates on kbps alone would pick whichever the extractor happened to list first —
-a coin flip between the original and a dub. `rank()` therefore treats `AudioTrackType.ORIGINAL`
-as decisive and uses bitrate only to break ties. Whichever track merges will use is printed
-above the format list, so a wrong guess is visible before you download 200 MB.
+Ranking on kbps alone picks whichever the extractor happened to list first — a coin flip
+between the original and a dub, and one that looks like a bug in the muxer rather than a bad
+guess about language.
+
+`rank()` treats `AudioTrackType.ORIGINAL` as decisive and uses bitrate only to break ties.
+But that only helps when YouTube tags the tracks at all, and it doesn't always. So the choice
+isn't left to ranking alone: a dropdown above the format list shows every merge-eligible
+track, defaulted to the ranked best, and the merge reads it at download time.
+
+Each entry spells out its type. If they all read `(untagged)`, YouTube sent no track metadata,
+`rank()` had nothing to work with, and the dropdown is the only thing preventing a random
+language. That's worth seeing on screen rather than discovering in a finished file.

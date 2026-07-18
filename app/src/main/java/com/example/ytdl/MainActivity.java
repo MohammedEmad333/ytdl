@@ -16,11 +16,13 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
 import android.text.InputType;
+import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -89,10 +91,14 @@ public class MainActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<Option> options = new ArrayList<>();
+    /** Merge-eligible audio tracks, best-ranked first. Index matches the spinner. */
+    private final List<AudioStream> audioTracks = new ArrayList<>();
 
     private EditText urlInput;
     private TextView status;
+    private Spinner audioSpinner;
     private ArrayAdapter<String> adapter;
+    private ArrayAdapter<String> audioAdapter;
     private String videoTitle = "video";
 
     // ---------------------------------------------------------------- lifecycle
@@ -142,6 +148,17 @@ public class MainActivity extends Activity {
         status.setPadding(0, gap, 0, gap);
         root.addView(status);
 
+        // Which audio track a merge pairs with is a guess the app shouldn't be making
+        // silently — YouTube's own metadata about it isn't always there. Show the ranking's
+        // answer, let it be overridden.
+        audioSpinner = new Spinner(this);
+        audioAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
+                new ArrayList<>());
+        audioAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        audioSpinner.setAdapter(audioAdapter);
+        audioSpinner.setVisibility(View.GONE);
+        root.addView(audioSpinner);
+
         final ListView list = new ListView(this);
         adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1,
                 new ArrayList<>());
@@ -183,24 +200,36 @@ public class MainActivity extends Activity {
     private void show(final StreamInfo info) {
         videoTitle = sanitize(info.getName());
 
-        // The audio track every merged option gets paired with. AAC in an .m4a container,
-        // because that's what MediaMuxer will accept alongside H.264 in an MP4.
-        final AudioStream bestAac = bestAacStream(info);
-
-        final StringBuilder header = new StringBuilder()
-                .append(info.getName()).append('\n')
-                .append(info.getUploaderName());
-        if (bestAac != null) {
-            final String track = trackLabel(bestAac);
-            header.append("\n\nMerges use: ")
-                    .append(track.isEmpty() ? "the only audio track" : track)
-                    .append(" · ").append(bestAac.getAverageBitrate()).append(" kbps");
+        // Merge-eligible audio: AAC in an .m4a container, because that's what MediaMuxer
+        // accepts alongside H.264 in an MP4. Ranked best-first so the spinner defaults well.
+        audioTracks.clear();
+        audioAdapter.clear();
+        for (final AudioStream as : info.getAudioStreams()) {
+            if (as.getDeliveryMethod() != DeliveryMethod.PROGRESSIVE_HTTP) {
+                continue;
+            }
+            if (as.getFormat() != org.schabi.newpipe.extractor.MediaFormat.M4A) {
+                continue;
+            }
+            audioTracks.add(as);
         }
-        header.append("\n\nTap a format to save it.");
-        status.setText(header.toString());
+        Collections.sort(audioTracks, (a, b) -> Long.compare(rank(b), rank(a)));
 
-        // High resolutions live here: video with no audio track at all. Each one gets
-        // merged with bestAac after download.
+        for (final AudioStream as : audioTracks) {
+            audioAdapter.add(trackLabel(as));
+        }
+        audioAdapter.notifyDataSetChanged();
+        audioSpinner.setVisibility(audioTracks.isEmpty() ? View.GONE : View.VISIBLE);
+        if (!audioTracks.isEmpty()) {
+            audioSpinner.setSelection(0);
+        }
+
+        status.setText(info.getName() + "\n" + info.getUploaderName()
+                + (audioTracks.isEmpty() ? "" : "\n\nAudio for merges ↓")
+                + "\n\nTap a format to save it.");
+
+        // High resolutions live here: video with no audio track at all. Each gets merged
+        // with whichever track is selected in the spinner at download time.
         final List<VideoStream> videoOnly = new ArrayList<>();
         for (final VideoStream vs : info.getVideoOnlyStreams()) {
             if (vs.getDeliveryMethod() != DeliveryMethod.PROGRESSIVE_HTTP) {
@@ -217,12 +246,12 @@ public class MainActivity extends Activity {
         Collections.sort(videoOnly,
                 (a, b) -> heightOf(b.getResolution()) - heightOf(a.getResolution()));
 
-        if (bestAac != null) {
+        if (!audioTracks.isEmpty()) {
             for (final VideoStream vs : videoOnly) {
                 options.add(new Option(
                         vs.getResolution() + " · merge with audio",
                         vs.getContent(),
-                        bestAac.getContent(),
+                        true,
                         "mp4"));
             }
         }
@@ -236,7 +265,7 @@ public class MainActivity extends Activity {
             options.add(new Option(
                     vs.getResolution() + " · direct, no merge",
                     vs.getContent(),
-                    null,
+                    false,
                     suffixOf(vs.getFormat(), "mp4")));
         }
 
@@ -244,13 +273,10 @@ public class MainActivity extends Activity {
             if (as.getDeliveryMethod() != DeliveryMethod.PROGRESSIVE_HTTP) {
                 continue;
             }
-            final String track = trackLabel(as);
             options.add(new Option(
-                    "Audio only · " + as.getAverageBitrate() + " kbps · "
-                            + nameOf(as.getFormat())
-                            + (track.isEmpty() ? "" : " · " + track),
+                    "Audio only · " + trackLabel(as) + " · " + nameOf(as.getFormat()),
                     as.getContent(),
-                    null,
+                    false,
                     suffixOf(as.getFormat(), "m4a")));
         }
 
@@ -266,27 +292,12 @@ public class MainActivity extends Activity {
         adapter.notifyDataSetChanged();
     }
 
-    private static AudioStream bestAacStream(final StreamInfo info) {
-        AudioStream best = null;
-        for (final AudioStream as : info.getAudioStreams()) {
-            if (as.getDeliveryMethod() != DeliveryMethod.PROGRESSIVE_HTTP) {
-                continue;
-            }
-            if (as.getFormat() != org.schabi.newpipe.extractor.MediaFormat.M4A) {
-                continue;
-            }
-            if (best == null || rank(as) > rank(best)) {
-                best = as;
-            }
-        }
-        return best;
-    }
-
     /**
-     * Bitrate alone isn't enough. YouTube now ships dubbed audio tracks alongside the
-     * original, often at identical bitrates, so ranking on kbps would pick whichever
-     * happened to come first in the list — a coin flip between English and a dub. The
-     * original wins outright here; bitrate only breaks ties within a track type.
+     * Bitrate alone isn't enough. YouTube ships dubbed audio tracks next to the original,
+     * often at identical bitrates, so ranking on kbps would pick whichever happened to come
+     * first — a coin flip between English and a dub. The original wins outright here;
+     * bitrate only breaks ties. If YouTube didn't tag the tracks, everything scores equal
+     * and the spinner is the only thing standing between you and a random language.
      */
     private static long rank(final AudioStream stream) {
         final AudioTrackType type = stream.getAudioTrackType();
@@ -294,27 +305,47 @@ public class MainActivity extends Activity {
         return originalBonus + Math.max(0, stream.getAverageBitrate());
     }
 
-    /** Distinguishes the otherwise-identical audio entries in the list. */
+    /**
+     * Deliberately spells out the track type. If every entry reads "untagged", YouTube sent
+     * no track metadata, rank() had nothing to work with, and the choice is genuinely yours
+     * to make — that's worth being able to see rather than infer from a wrong download.
+     */
     private static String trackLabel(final AudioStream stream) {
         final String name = stream.getAudioTrackName();
-        if (name != null && !name.isEmpty()) {
-            return name;
-        }
         final Locale locale = stream.getAudioLocale();
-        if (locale != null) {
-            return locale.getDisplayName();
+
+        final String who;
+        if (name != null && !name.isEmpty()) {
+            who = name;
+        } else if (locale != null) {
+            who = locale.getDisplayName();
+        } else {
+            who = "Track";
         }
-        return "";
+
+        final AudioTrackType type = stream.getAudioTrackType();
+        final String kind = type == null ? "untagged" : type.name().toLowerCase(Locale.US);
+
+        return who + " (" + kind + ") · " + stream.getAverageBitrate() + " kbps";
     }
 
     // ---------------------------------------------------------------- download
 
     private void download(final Option option) {
-        if (option.audioUrl == null) {
+        if (!option.needsMerge) {
             downloadDirect(option);
-        } else {
-            executor.execute(() -> downloadAndMerge(option));
+            return;
         }
+
+        // Read the spinner here rather than baking a URL into the Option at fetch time,
+        // so changing the track after fetching actually changes what gets downloaded.
+        final int selected = audioSpinner.getSelectedItemPosition();
+        if (selected < 0 || selected >= audioTracks.size()) {
+            status.setText("Pick an audio track first.");
+            return;
+        }
+        final AudioStream track = audioTracks.get(selected);
+        executor.execute(() -> downloadAndMerge(option, track));
     }
 
     /** Single file, nothing to combine — hand it to the system and forget about it. */
@@ -341,14 +372,14 @@ public class MainActivity extends Activity {
      * foreground service, which means backgrounding the app kills it. Fine for tap-and-wait;
      * if that starts annoying you, a foreground service is the fix.
      */
-    private void downloadAndMerge(final Option option) {
+    private void downloadAndMerge(final Option option, final AudioStream track) {
         final File video = new File(getCacheDir(), "video.part");
         final File audio = new File(getCacheDir(), "audio.part");
         final File merged = new File(getCacheDir(), "merged.mp4");
 
         try {
             fetchToFile(option.videoUrl, video, "Video");
-            fetchToFile(option.audioUrl, audio, "Audio");
+            fetchToFile(track.getContent(), audio, "Audio");
 
             say("Merging…");
             mux(video, audio, merged);
@@ -592,18 +623,18 @@ public class MainActivity extends Activity {
 
     // ---------------------------------------------------------------- helpers
 
-    /** One entry in the format list. A non-null audioUrl means it needs merging. */
+    /** One entry in the format list. needsMerge means it has no audio of its own. */
     private static final class Option {
         final String label;
         final String videoUrl;
-        final String audioUrl;
+        final boolean needsMerge;
         final String extension;
 
-        Option(final String label, final String videoUrl, final String audioUrl,
+        Option(final String label, final String videoUrl, final boolean needsMerge,
                final String extension) {
             this.label = label;
             this.videoUrl = videoUrl;
-            this.audioUrl = audioUrl;
+            this.needsMerge = needsMerge;
             this.extension = extension;
         }
     }
