@@ -38,7 +38,7 @@ android {
 }
 
 dependencies {
-    implementation 'com.github.teamnewpipe:NewPipeExtractor:v0.26.2'
+    implementation 'com.github.teamnewpipe:NewPipeExtractor:v0.26.3'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 
     // If Gradle can't resolve this, bump the version — it's the one line here I couldn't
