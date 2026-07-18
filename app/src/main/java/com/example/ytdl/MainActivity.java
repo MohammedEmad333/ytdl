@@ -34,6 +34,7 @@ import org.schabi.newpipe.extractor.Page;
 import org.schabi.newpipe.extractor.ServiceList;
 import org.schabi.newpipe.extractor.StreamingService;
 import org.schabi.newpipe.extractor.playlist.PlaylistInfo;
+import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor;
 import org.schabi.newpipe.extractor.stream.AudioStream;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.stream.StreamInfoItem;
@@ -665,21 +666,58 @@ public class MainActivity extends Activity {
                 if (linkType(url) == StreamingService.LinkType.PLAYLIST) {
                     fetchPlaylist(url);
                 } else {
-                    final StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, url);
-                    // Only probe the token server when it might matter — i.e. adaptive
-                    // formats came back empty. On a healthy video this stays false and no
-                    // localhost call is made at all. The probe is on this thread, not the
-                    // main one, because it does I/O.
+                    StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, url);
+
+                    // 0/0 means the adaptive formats are poToken-gated. If a bgutil server is
+                    // running, mint a token and re-extract WITH it — the token has to be set
+                    // before getInfo(), so this is a fresh fetch, not a patch of the first
+                    // result. This is the whole "turn on Termux, qualities appear" path.
                     final boolean missingFormats =
                             (info.getVideoOnlyStreams() == null || info.getVideoOnlyStreams().isEmpty())
                             && (info.getAudioStreams() == null || info.getAudioStreams().isEmpty());
-                    final boolean tokenServerUp = missingFormats && PoToken.isServerUp();
-                    main.post(() -> showVideo(info, tokenServerUp));
+                    boolean tokenServerUp = false;
+
+                    if (missingFormats && PoToken.isServerUp()) {
+                        tokenServerUp = true;
+                        final String videoId = extractVideoId(info, url);
+                        if (videoId != null) {
+                            main.post(() -> status.setText("Token server up — fetching a"
+                                    + " poToken and retrying…"));
+                            YoutubeStreamExtractor.setPoTokenProvider(new PoToken.Provider(videoId));
+                            try {
+                                final StreamInfo withToken =
+                                        StreamInfo.getInfo(ServiceList.YouTube, url);
+                                info = withToken;
+                            } catch (final Exception retryError) {
+                                // Keep the first result; the diagnostic still explains 360p.
+                            } finally {
+                                // Never leave a video-specific provider set for the next fetch.
+                                YoutubeStreamExtractor.setPoTokenProvider(null);
+                            }
+                        }
+                    }
+
+                    final StreamInfo shown = info;
+                    final boolean serverUp = tokenServerUp;
+                    main.post(() -> showVideo(shown, serverUp));
                 }
             } catch (final Exception e) {
                 main.post(() -> status.setText("Couldn't read that link: " + e.getMessage()));
             }
         });
+    }
+
+    /**
+     * The video id for the poToken request. StreamInfo.getId() already holds it for YouTube;
+     * the URL is only a fallback in case a future extractor leaves it blank.
+     */
+    private static String extractVideoId(final StreamInfo info, final String url) {
+        final String id = info.getId();
+        if (id != null && !id.isEmpty()) {
+            return id;
+        }
+        final Matcher m = Pattern.compile("(?:v=|youtu\\.be/|/shorts/)([A-Za-z0-9_-]{11})").matcher(url);
+        return m.find() ? m.group(1) : null;
     }
 
     private static StreamingService.LinkType linkType(final String url) {

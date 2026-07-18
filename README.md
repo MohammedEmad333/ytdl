@@ -110,11 +110,21 @@ on `127.0.0.1:4416` and tailors the diagnostic: if it's up, it points you at `yt
 not, it tells you to start it. The probe only runs when formats are actually missing, so a
 healthy fetch never pays for a localhost call.
 
-This is deliberately a *pointer*, not an in-app download. `PoToken.fetchToken()` exists — it's
-the seam where a full in-app path would call `setPoTokenProvider()` — but it isn't wired in.
-That path would work (the extractor slot is real, bgutil mints a compatible token), but it
-stands on two experimental pieces that break on YouTube's schedule, so the robust choice is to
-let the maintained yt-dlp pipeline do the fetch and keep the app pointing at it.
+When the server is up, the app goes further than pointing: on `0/0` it mints a token from
+bgutil and **re-extracts with it**, so the higher qualities appear in the app directly. The
+token must be set before extraction, so this is a second fetch with the provider active, not
+a patch of the first result. `PoToken.Provider` implements the extractor's `PoTokenProvider`
+interface, mints once per video (cached across the three client callbacks), and is torn down
+after each attempt — a video-bound token is useless for the next video, and stale reuse is
+what produces 403s.
+
+The honest caveats stand: this leans on two experimental pieces (NewPipeExtractor's
+pre-release poToken support and bgutil), so it needs occasional care when YouTube shifts
+BotGuard. And there's one unsettled detail baked into a single line of `PoToken.Provider`:
+both poToken slots get the same content-bound token. If YouTube ever demands a separate
+visitor-bound token for the streaming URLs, the streaming URLs would 403 while extraction
+succeeds — and that one line is where the fix goes. When the server isn't running, none of
+this fires and the app behaves exactly as before.
 
 ## Why a Task is a page URL and not two URLs
 
