@@ -666,7 +666,15 @@ public class MainActivity extends Activity {
                     fetchPlaylist(url);
                 } else {
                     final StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, url);
-                    main.post(() -> showVideo(info));
+                    // Only probe the token server when it might matter — i.e. adaptive
+                    // formats came back empty. On a healthy video this stays false and no
+                    // localhost call is made at all. The probe is on this thread, not the
+                    // main one, because it does I/O.
+                    final boolean missingFormats =
+                            (info.getVideoOnlyStreams() == null || info.getVideoOnlyStreams().isEmpty())
+                            && (info.getAudioStreams() == null || info.getAudioStreams().isEmpty());
+                    final boolean tokenServerUp = missingFormats && PoToken.isServerUp();
+                    main.post(() -> showVideo(info, tokenServerUp));
                 }
             } catch (final Exception e) {
                 main.post(() -> status.setText("Couldn't read that link: " + e.getMessage()));
@@ -738,7 +746,7 @@ public class MainActivity extends Activity {
         formatAdapter.notifyDataSetChanged();
     }
 
-    private void showVideo(final StreamInfo info) {
+    private void showVideo(final StreamInfo info, final boolean tokenServerUp) {
         videoTitle = Streams.sanitize(info.getName());
 
         audioTracks.addAll(Streams.mergeAudio(info));
@@ -757,7 +765,7 @@ public class MainActivity extends Activity {
             // No audio means no merges, so the list collapses to whatever muxed stream
             // exists. That looks identical whether YouTube withheld the formats or these
             // filters dropped them, and the two need opposite fixes.
-            header.append("\n\n").append(Streams.diagnostics(info));
+            header.append("\n\n").append(Streams.diagnostics(info, tokenServerUp));
         } else {
             header.append("\n\nAudio for merges ↓");
         }

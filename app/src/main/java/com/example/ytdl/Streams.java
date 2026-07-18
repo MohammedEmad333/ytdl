@@ -245,7 +245,7 @@ public final class Streams {
      * Reads "usable/raw": if raw is 0, YouTube gave nothing. If raw is healthy and usable is
      * 0, that's this file's doing and the delivery methods say which check did it.
      */
-    public static String diagnostics(final StreamInfo info) {
+    public static String diagnostics(final StreamInfo info, final boolean tokenServerUp) {
         final int rawVideoOnly = info.getVideoOnlyStreams() == null
                 ? 0 : info.getVideoOnlyStreams().size();
         final int rawAudio = info.getAudioStreams() == null ? 0 : info.getAudioStreams().size();
@@ -258,7 +258,17 @@ public final class Streams {
                 .append("  (usable/sent)");
 
         if (rawVideoOnly == 0 && rawAudio == 0) {
-            s.append("\nYouTube sent no adaptive formats — poToken wall, not a local filter.");
+            // This is the poToken wall. Whether it's crossable right now depends on one
+            // thing the app can actually check: is a bgutil token server running on the
+            // device? So say which situation the user is in, and what to do about it.
+            if (tokenServerUp) {
+                s.append("\nOnly 360p — YouTube wants a poToken. The token server is running,"
+                        + " so this is fetchable with yt-dlp in Termux (ytdl <url>).");
+            } else {
+                s.append("\nOnly 360p — YouTube wants a poToken to release higher formats."
+                        + "\nStart the bgutil token server in Termux, then fetch there with"
+                        + " yt-dlp (ytdl <url>). Without it, 360p is all YouTube sends.");
+            }
         } else if (usableVideoOnly == 0 || usableAudio == 0) {
             s.append("\nSent but filtered here. Delivery: ").append(deliveryMethods(info));
         }

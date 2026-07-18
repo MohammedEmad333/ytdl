@@ -97,6 +97,25 @@ The limit worth knowing: YouTube's stream URLs expire after a few hours. Pause o
 resume will fail with a 403, because the URL is stale rather than the file being wrong.
 Re-fetch the video and queue it again.
 
+## The poToken wall, and the token-server pointer
+
+Some videos return only a muxed 360p stream: `0/0` in the diagnostic, no manifests. That's
+YouTube gating the adaptive formats behind a poToken — an integrity token minted by running
+its BotGuard challenge, which the phone can't safely do. The reference tools (NewPipe, yt-dlp)
+hit the same wall for the same reason; it isn't this app's filters.
+
+The practical escape is bgutil running as a local server in Termux — it runs the challenge and
+mints tokens. So when a fetch comes back `0/0`, the app checks whether that server is answering
+on `127.0.0.1:4416` and tailors the diagnostic: if it's up, it points you at `ytdl <url>`; if
+not, it tells you to start it. The probe only runs when formats are actually missing, so a
+healthy fetch never pays for a localhost call.
+
+This is deliberately a *pointer*, not an in-app download. `PoToken.fetchToken()` exists — it's
+the seam where a full in-app path would call `setPoTokenProvider()` — but it isn't wired in.
+That path would work (the extractor slot is real, bgutil mints a compatible token), but it
+stands on two experimental pieces that break on YouTube's schedule, so the robust choice is to
+let the maintained yt-dlp pipeline do the fetch and keep the app pointing at it.
+
 ## Why a Task is a page URL and not two URLs
 
 Playlists and expiry-proof pause look like separate features and are the same one.
