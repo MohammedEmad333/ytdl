@@ -666,45 +666,51 @@ public class MainActivity extends Activity {
                 if (linkType(url) == StreamingService.LinkType.PLAYLIST) {
                     fetchPlaylist(url);
                 } else {
-                    StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, url);
-
-                    // 0/0 means the adaptive formats are poToken-gated. If a bgutil server is
-                    // running, mint a token and re-extract WITH it — the token has to be set
-                    // before getInfo(), so this is a fresh fetch, not a patch of the first
-                    // result. This is the whole "turn on Termux, qualities appear" path.
+                    final StreamInfo firstInfo = StreamInfo.getInfo(ServiceList.YouTube, url);
                     final boolean missingFormats =
-                            (info.getVideoOnlyStreams() == null || info.getVideoOnlyStreams().isEmpty())
-                            && (info.getAudioStreams() == null || info.getAudioStreams().isEmpty());
-                    boolean tokenServerUp = false;
+                            (firstInfo.getVideoOnlyStreams() == null || firstInfo.getVideoOnlyStreams().isEmpty())
+                            && (firstInfo.getAudioStreams() == null || firstInfo.getAudioStreams().isEmpty());
+                    final boolean serverUp = missingFormats && PoToken.isServerUp();
 
-                    if (missingFormats && PoToken.isServerUp()) {
-                        tokenServerUp = true;
-                        final String videoId = extractVideoId(info, url);
-                        if (videoId != null) {
-                            main.post(() -> status.setText("Token server up — fetching a"
-                                    + " poToken and retrying…"));
-                            YoutubeStreamExtractor.setPoTokenProvider(new PoToken.Provider(videoId));
-                            try {
-                                final StreamInfo withToken =
-                                        StreamInfo.getInfo(ServiceList.YouTube, url);
-                                info = withToken;
-                            } catch (final Exception retryError) {
-                                // Keep the first result; the diagnostic still explains 360p.
-                            } finally {
-                                // Never leave a video-specific provider set for the next fetch.
-                                YoutubeStreamExtractor.setPoTokenProvider(null);
-                            }
-                        }
-                    }
+                    // On 0/0 with a server, re-extract with a poToken. Done in a helper that
+                    // RETURNS the result rather than reassigning a captured variable — a lambda
+                    // can only capture effectively-final locals, so the retry can't just
+                    // overwrite `info` in place.
+                    final StreamInfo shown = serverUp
+                            ? withPoToken(url, firstInfo)
+                            : firstInfo;
 
-                    final StreamInfo shown = info;
-                    final boolean serverUp = tokenServerUp;
                     main.post(() -> showVideo(shown, serverUp));
                 }
             } catch (final Exception e) {
                 main.post(() -> status.setText("Couldn't read that link: " + e.getMessage()));
             }
         });
+    }
+
+    /**
+     * Re-extract with a poToken from the local bgutil server, returning the richer result —
+     * or the original if anything goes wrong. Kept as a returning helper so the caller's
+     * lambda captures only final locals: a lambda can't reassign what it captures, so the
+     * retry can't overwrite the first result in place.
+     *
+     * The provider is a static on the extractor and is cleared in finally, so it never leaks
+     * to the next fetch. Fetches run on a single-thread executor, so two can't race it.
+     */
+    private StreamInfo withPoToken(final String url, final StreamInfo fallback) {
+        final String videoId = extractVideoId(fallback, url);
+        if (videoId == null) {
+            return fallback;
+        }
+        main.post(() -> status.setText("Token server up — fetching a poToken and retrying…"));
+        YoutubeStreamExtractor.setPoTokenProvider(new PoToken.Provider(videoId));
+        try {
+            return StreamInfo.getInfo(ServiceList.YouTube, url);
+        } catch (final Exception e) {
+            return fallback;
+        } finally {
+            YoutubeStreamExtractor.setPoTokenProvider(null);
+        }
     }
 
     /**
