@@ -90,9 +90,13 @@ public final class PoToken {
     public static Token mint(final String videoId) {
         try {
             final JSONObject body = new JSONObject().put("content_binding", videoId);
+            // Content-first order, matching Net.java's RequestBody.create usage which has
+            // compiled in every build. okhttp 4.x resolves this to the current
+            // create(String, MediaType) overload.
+            final RequestBody payload = RequestBody.create(body.toString(), JSON);
             final Request request = new Request.Builder()
                     .url(BASE_URL + "/get_pot")
-                    .post(RequestBody.create(body.toString(), JSON))
+                    .post(payload)
                     .build();
 
             try (Response response = MINT.newCall(request).execute()) {
