@@ -34,6 +34,7 @@ import org.schabi.newpipe.extractor.Page;
 import org.schabi.newpipe.extractor.ServiceList;
 import org.schabi.newpipe.extractor.StreamingService;
 import org.schabi.newpipe.extractor.playlist.PlaylistInfo;
+import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor;
 import org.schabi.newpipe.extractor.stream.AudioStream;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.stream.StreamInfoItem;
@@ -665,21 +666,64 @@ public class MainActivity extends Activity {
                 if (linkType(url) == StreamingService.LinkType.PLAYLIST) {
                     fetchPlaylist(url);
                 } else {
-                    final StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, url);
-                    // Only probe the token server when it might matter — i.e. adaptive
-                    // formats came back empty. On a healthy video this stays false and no
-                    // localhost call is made at all. The probe is on this thread, not the
-                    // main one, because it does I/O.
+                    final StreamInfo firstInfo = StreamInfo.getInfo(ServiceList.YouTube, url);
                     final boolean missingFormats =
-                            (info.getVideoOnlyStreams() == null || info.getVideoOnlyStreams().isEmpty())
-                            && (info.getAudioStreams() == null || info.getAudioStreams().isEmpty());
-                    final boolean tokenServerUp = missingFormats && PoToken.isServerUp();
-                    main.post(() -> showVideo(info, tokenServerUp));
+                            (firstInfo.getVideoOnlyStreams() == null || firstInfo.getVideoOnlyStreams().isEmpty())
+                            && (firstInfo.getAudioStreams() == null || firstInfo.getAudioStreams().isEmpty());
+                    final boolean serverUp = missingFormats && PoToken.isServerUp();
+
+                    // On 0/0 with a server, re-extract with a poToken. Done in a helper that
+                    // RETURNS the result rather than reassigning a captured variable — a lambda
+                    // can only capture effectively-final locals, so the retry can't just
+                    // overwrite `info` in place.
+                    final StreamInfo shown = serverUp
+                            ? withPoToken(url, firstInfo)
+                            : firstInfo;
+
+                    main.post(() -> showVideo(shown, serverUp));
                 }
             } catch (final Exception e) {
                 main.post(() -> status.setText("Couldn't read that link: " + e.getMessage()));
             }
         });
+    }
+
+    /**
+     * Re-extract with a poToken from the local bgutil server, returning the richer result —
+     * or the original if anything goes wrong. Kept as a returning helper so the caller's
+     * lambda captures only final locals: a lambda can't reassign what it captures, so the
+     * retry can't overwrite the first result in place.
+     *
+     * The provider is a static on the extractor and is cleared in finally, so it never leaks
+     * to the next fetch. Fetches run on a single-thread executor, so two can't race it.
+     */
+    private StreamInfo withPoToken(final String url, final StreamInfo fallback) {
+        final String videoId = extractVideoId(fallback, url);
+        if (videoId == null) {
+            return fallback;
+        }
+        main.post(() -> status.setText("Token server up — fetching a poToken and retrying…"));
+        YoutubeStreamExtractor.setPoTokenProvider(new PoToken.Provider(videoId));
+        try {
+            return StreamInfo.getInfo(ServiceList.YouTube, url);
+        } catch (final Exception e) {
+            return fallback;
+        } finally {
+            YoutubeStreamExtractor.setPoTokenProvider(null);
+        }
+    }
+
+    /**
+     * The video id for the poToken request. StreamInfo.getId() already holds it for YouTube;
+     * the URL is only a fallback in case a future extractor leaves it blank.
+     */
+    private static String extractVideoId(final StreamInfo info, final String url) {
+        final String id = info.getId();
+        if (id != null && !id.isEmpty()) {
+            return id;
+        }
+        final Matcher m = Pattern.compile("(?:v=|youtu\\.be/|/shorts/)([A-Za-z0-9_-]{11})").matcher(url);
+        return m.find() ? m.group(1) : null;
     }
 
     private static StreamingService.LinkType linkType(final String url) {
