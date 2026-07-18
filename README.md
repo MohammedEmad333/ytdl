@@ -41,6 +41,14 @@ YouTube serves two kinds of streams, and the list mixes both:
   360p on almost everything now, occasionally 720p. Goes straight to DownloadManager.
 - **`Audio only`** — the audio track by itself, at full quality.
 
+Both tracks are written interleaved, in timestamp order. This matters more than it sounds:
+the obvious version — copy the whole video track, then the whole audio track — produces a
+valid MP4 that plays badly, because MediaMuxer writes samples in the order it receives them.
+That layout puts all the video in the first half of the file and all the audio in the second,
+so playback seeks across the whole file and back for every 20ms of audio and read-ahead never
+helps. It only shows at high resolutions: a 360p file fits in cache and the thrashing is free,
+a 150MB 1080p60 file doesn't and it stutters.
+
 The merge uses `MediaMuxer`, which is part of the Android framework. It's a remux, not a
 re-encode: the compressed H.264 and AAC samples are copied into a new MP4 container
 untouched. Takes a second or two and loses nothing. This is why there's no ffmpeg

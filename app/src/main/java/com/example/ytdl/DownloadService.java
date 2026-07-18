@@ -683,8 +683,8 @@ public class DownloadService extends Service {
                     Math.max(bufferSizeFor(videoFormat), bufferSizeFor(audioFormat)));
             final MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
 
-            copyTrack(videoExtractor, muxer, outVideo, buffer, info);
-            copyTrack(audioExtractor, muxer, outAudio, buffer, info);
+            copyInterleaved(videoExtractor, audioExtractor, muxer, outVideo, outAudio,
+                    buffer, info);
 
             muxer.stop();
         } finally {
@@ -700,24 +700,57 @@ public class DownloadService extends Service {
         }
     }
 
-    private static void copyTrack(final MediaExtractor extractor, final MediaMuxer muxer,
-                                  final int trackIndex, final ByteBuffer buffer,
-                                  final MediaCodec.BufferInfo info) {
+    /**
+     * Writes both tracks in timestamp order, alternating between them.
+     *
+     * The obvious version — copy the whole video track, then the whole audio track — produces
+     * a valid MP4 that plays badly. MediaMuxer writes samples into the file in the order it
+     * receives them, so that layout puts every video sample in the first half of the file and
+     * every audio sample in the second. Playing it means seeking across the whole file and
+     * back for every 20ms of audio, which defeats the player's read-ahead entirely.
+     *
+     * It only shows up at high resolutions, which is what makes it easy to miss: a 360p file
+     * is small enough to sit in cache, so the thrashing costs nothing. A 1080p60 file is
+     * 150MB and it doesn't.
+     */
+    private static void copyInterleaved(final MediaExtractor video, final MediaExtractor audio,
+                                        final MediaMuxer muxer, final int videoTrack,
+                                        final int audioTrack, final ByteBuffer buffer,
+                                        final MediaCodec.BufferInfo info) {
         while (true) {
-            final int size = extractor.readSampleData(buffer, 0);
-            if (size < 0) {
+            // -1 once a track is exhausted.
+            final long videoTime = video.getSampleTime();
+            final long audioTime = audio.getSampleTime();
+
+            if (videoTime < 0 && audioTime < 0) {
                 break;
             }
+
+            // Whichever track is further behind goes next, so the file lands in roughly
+            // playback order and a player can read it front to back.
+            final boolean takeVideo = audioTime < 0
+                    || (videoTime >= 0 && videoTime <= audioTime);
+            final MediaExtractor source = takeVideo ? video : audio;
+            final int track = takeVideo ? videoTrack : audioTrack;
+
+            final int size = source.readSampleData(buffer, 0);
+            if (size < 0) {
+                // Exhausted between the time check and the read; advance so getSampleTime
+                // reports -1 next time round rather than spinning here.
+                source.advance();
+                continue;
+            }
+
             info.offset = 0;
             info.size = size;
-            info.presentationTimeUs = extractor.getSampleTime();
+            info.presentationTimeUs = source.getSampleTime();
             // MediaExtractor and MediaCodec use different flag constants for the same idea,
             // so translate rather than passing the raw value through.
-            info.flags = (extractor.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0
+            info.flags = (source.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0
                     ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
 
-            muxer.writeSampleData(trackIndex, buffer, info);
-            extractor.advance();
+            muxer.writeSampleData(track, buffer, info);
+            source.advance();
         }
     }
 
