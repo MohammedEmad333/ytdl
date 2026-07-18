@@ -262,7 +262,19 @@ public final class Streams {
         } else if (usableVideoOnly == 0 || usableAudio == 0) {
             s.append("\nSent but filtered here. Delivery: ").append(deliveryMethods(info));
         }
+
+        // The poToken requirement lands on the player's format list. Manifests are a
+        // separate path and aren't necessarily gated the same way, so if either of these
+        // exists there's a route to the higher resolutions that doesn't involve defeating
+        // YouTube's attestation — expensive to build, but buildable and testable.
+        s.append("\nmanifests: hls ").append(present(info.getHlsUrl()))
+                .append(" · dash ").append(present(info.getDashMpdUrl()));
+
         return s.toString();
+    }
+
+    private static String present(final String url) {
+        return url == null || url.isEmpty() ? "no" : "yes";
     }
 
     private static String deliveryMethods(final StreamInfo info) {
