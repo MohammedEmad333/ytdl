@@ -2,8 +2,12 @@
 
 Paste a link, pick a format, DownloadManager saves it to Downloads.
 
-Five files, no binaries. GitHub Actions builds the APK, so no local Android SDK is needed
-— you never have to open Android Studio to get a working app.
+No binaries anywhere. GitHub Actions builds the APK, so no local Android SDK is needed —
+you never have to open Android Studio to get a working app.
+
+Two tabs: **Fetch** to pick formats, **Downloads** to watch the queue. Downloads run in a
+foreground service, so they continue when you leave the app and report progress in the
+notification bar.
 
 ## Getting the APK
 
@@ -58,12 +62,23 @@ still fights this one.
 The fix is nearly always bumping the NewPipeExtractor version in `app/build.gradle` and
 letting Actions rebuild — which you can do from a phone in about thirty seconds.
 
+## The queue
+
+Everything goes through `DownloadService`, a foreground service — including single-file
+downloads that once went to `DownloadManager`. Two mechanisms meant two progress models and
+two different behaviours when backgrounded, which is worse than either one alone.
+
+Tasks run one at a time. Tap a live task in the Downloads tab to cancel it; the worker checks
+between chunks, so it stops in a second or so rather than after finishing the file.
+
+The activity polls the task list every 500ms while it's on screen. Polling rather than
+registering a listener: nothing to leak, and the service outlives the activity by design.
+
 ## Known limits
 
 - MPEG-4 video only for merging. No WebM/VP9, no HLS, no live streams.
-- Merging runs on the activity's executor, not a foreground service — leaving the app
-  mid-download cancels it. Direct downloads go through DownloadManager and survive it.
-- No playlists, no queue.
+- One task at a time — no parallel downloads.
+- No playlists.
 - Debug signing. If you switch on `minifyEnabled` for a release build later, you need
   ProGuard keep rules for Rhino or signature deobfuscation gets stripped and the app
   breaks in release only.

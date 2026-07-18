@@ -4,11 +4,22 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
-        Everything here points at framework resources rather than app ones. No strings.xml,
-        no launcher icon PNGs, no styles.xml. That's deliberate: icons are binary files and
-        you can't paste a binary into GitHub's web editor from a phone.
-        No storage permission either — minSdk is 29, and DownloadManager writing to public
-        Downloads has been permission-free since Android 10.
+        The queue survives leaving the app, which means a foreground service, which means
+        a notification. From Android 14 the type has to be declared here AND passed to
+        startForeground(), and they have to agree or the system refuses to start it.
+        dataSync is the right type for downloads.
+        POST_NOTIFICATIONS is runtime-requested from Android 13 up — without it the service
+        still works but its progress notification is silently invisible.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+        Framework resources only — no strings.xml, no launcher icon PNGs, no styles.xml.
+        Icons are binary, and this repo deliberately has no binary files in it.
+        No storage permission: minSdk is 29, and MediaStore writes to the public Downloads
+        collection have been permission-free since Android 10.
     -->
     <application
         android:allowBackup="true"
@@ -25,6 +36,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
     </application>
 
