@@ -3,6 +3,7 @@ package com.example.ytdl;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -28,25 +29,31 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import org.schabi.newpipe.extractor.NewPipe;
+import org.schabi.newpipe.extractor.ListExtractor;
+import org.schabi.newpipe.extractor.Page;
 import org.schabi.newpipe.extractor.ServiceList;
-import org.schabi.newpipe.extractor.localization.Localization;
+import org.schabi.newpipe.extractor.StreamingService;
+import org.schabi.newpipe.extractor.playlist.PlaylistInfo;
 import org.schabi.newpipe.extractor.stream.AudioStream;
-import org.schabi.newpipe.extractor.stream.AudioTrackType;
-import org.schabi.newpipe.extractor.stream.DeliveryMethod;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
+import org.schabi.newpipe.extractor.stream.StreamInfoItem;
 import org.schabi.newpipe.extractor.stream.VideoStream;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
 
-    private static boolean extractorReady = false;
+    /** Shared text is usually "Title\nhttps://youtu.be/…", so take the first URL in it. */
+    private static final Pattern URL_IN_TEXT = Pattern.compile("https?://\\S+");
+
+    /** Playlists can run to thousands; pagination is a request per page. */
+    private static final int PLAYLIST_CAP = 200;
 
     /** Extraction only — downloading belongs to the service. */
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -55,6 +62,8 @@ public class MainActivity extends Activity {
     private final List<Option> options = new ArrayList<>();
     /** Merge-eligible audio tracks, best-ranked first. Index matches the spinner. */
     private final List<AudioStream> audioTracks = new ArrayList<>();
+    /** Non-empty means the fetched URL was a playlist and options are target qualities. */
+    private final List<Entry> playlist = new ArrayList<>();
     private List<DownloadService.Task> queueSnapshot = new ArrayList<>();
 
     private EditText urlInput;
@@ -69,6 +78,7 @@ public class MainActivity extends Activity {
     private QueueAdapter queueAdapter;
     private ArrayAdapter<String> audioAdapter;
 
+    private String pageUrl = "";
     private String videoTitle = "video";
 
     // ---------------------------------------------------------------- lifecycle
@@ -76,11 +86,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(final Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        if (!extractorReady) {
-            NewPipe.init(new Net.OkHttpDownloader(), new Localization("en", "US"));
-            extractorReady = true;
-        }
+        Net.ensureExtractor();
 
         setContentView(buildUi());
         selectTab(true);
@@ -92,6 +98,17 @@ public class MainActivity extends Activity {
                 != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
         }
+
+        handleShare(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(final Intent intent) {
+        super.onNewIntent(intent);
+        // singleTop in the manifest: a second share arrives here rather than as a new
+        // activity stacked on the first.
+        setIntent(intent);
+        handleShare(intent);
     }
 
     @Override
@@ -110,6 +127,25 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         executor.shutdownNow();
+    }
+
+    /** Share → YT Downloader, and it fetches on open. */
+    private void handleShare(final Intent intent) {
+        if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) {
+            return;
+        }
+        final String text = intent.getStringExtra(Intent.EXTRA_TEXT);
+        if (text == null) {
+            return;
+        }
+        final Matcher matcher = URL_IN_TEXT.matcher(text);
+        if (!matcher.find()) {
+            return;
+        }
+        final String url = matcher.group();
+        urlInput.setText(url);
+        selectTab(true);
+        fetch(url);
     }
 
     // ---------------------------------------------------------------- chrome
@@ -142,8 +178,8 @@ public class MainActivity extends Activity {
      * watches. Intercepting would mean fighting the ListViews for the gesture, and a
      * ListView calls requestDisallowInterceptTouchEvent the moment it starts scrolling, so
      * an interception-based version drops swipes that begin on a scrolled list. Observing
-     * sidesteps the argument entirely: vertical flings are ignored by the angle check, and
-     * ListView has no use for horizontal ones.
+     * sidesteps the argument: vertical flings fail the angle check, and ListView has no use
+     * for horizontal ones.
      */
     private final class SwipePager extends FrameLayout {
 
@@ -165,7 +201,6 @@ public class MainActivity extends Activity {
                     if (Math.abs(vx) < minVelocity || Math.abs(vx) < Math.abs(vy) * 1.5f) {
                         return false;
                     }
-                    // Left drags the next tab in; right drags the previous one back.
                     animateTo(vx < 0);
                     return true;
                 }
@@ -180,11 +215,9 @@ public class MainActivity extends Activity {
     }
 
     private void animateTo(final boolean toQueue) {
-        final boolean showingQueue = queuePane.getVisibility() == View.VISIBLE;
-        if (showingQueue == toQueue) {
+        if ((queuePane.getVisibility() == View.VISIBLE) == toQueue) {
             return;
         }
-
         selectTab(!toQueue);
 
         final View incoming = toQueue ? queuePane : fetchPane;
@@ -201,10 +234,6 @@ public class MainActivity extends Activity {
         return title;
     }
 
-    /**
-     * Two labels over a FrameLayout rather than TabHost. TabHost looks like 2011 and resists
-     * styling at every turn; this is the same behaviour with none of the argument.
-     */
     private View buildTabs() {
         final LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
@@ -212,7 +241,6 @@ public class MainActivity extends Activity {
 
         fetchTabLabel = tabLabel("FETCH", true);
         queueTabLabel = tabLabel("DOWNLOADS", false);
-
         bar.addView(fetchTabLabel);
         bar.addView(queueTabLabel);
 
@@ -258,7 +286,7 @@ public class MainActivity extends Activity {
         root.setPadding(pad, Ui.dp(this, 16), pad, 0);
 
         urlInput = new EditText(this);
-        urlInput.setHint("youtube.com/watch?v=…");
+        urlInput.setHint("youtube.com/watch?v=… or a playlist");
         urlInput.setHintTextColor(Ui.MUTED);
         urlInput.setTextColor(Ui.TEXT);
         urlInput.setTextSize(Ui.size(14));
@@ -285,14 +313,14 @@ public class MainActivity extends Activity {
         root.addView(fetch, fetchParams);
 
         status = Ui.sans(this, 14, Ui.MUTED);
-        status.setText("Paste a YouTube link above, then tap Fetch.");
+        status.setText("Paste a link, or share one to this app.");
         status.setLineSpacing(Ui.dp(this, 3), 1f);
         status.setPadding(0, Ui.dp(this, 16), 0, Ui.dp(this, 4));
         root.addView(status);
 
         // Which audio track a merge pairs with is a guess the app shouldn't make silently —
         // YouTube's metadata about it isn't always there. Show the ranking's answer, let it
-        // be overridden.
+        // be overridden. Hidden for playlists: forty videos don't share track ids.
         audioSpinner = new Spinner(this);
         audioAdapter = new ArrayAdapter<String>(this,
                 android.R.layout.simple_spinner_item, new ArrayList<>()) {
@@ -491,13 +519,12 @@ public class MainActivity extends Activity {
 
         final View filled = new View(c);
         filled.setBackgroundColor(stateColor(task.state));
-        bar.addView(filled, new LinearLayout.LayoutParams(0,
-                Math.max(2, Ui.dp(c, 2)), percent));
+        bar.addView(filled, new LinearLayout.LayoutParams(0, Math.max(2, Ui.dp(c, 2)), percent));
 
         final View rest = new View(c);
         rest.setBackgroundColor(Ui.LINE);
-        bar.addView(rest, new LinearLayout.LayoutParams(0,
-                Math.max(2, Ui.dp(c, 2)), 100 - percent));
+        bar.addView(rest, new LinearLayout.LayoutParams(0, Math.max(2, Ui.dp(c, 2)),
+                100 - percent));
 
         return bar;
     }
@@ -545,12 +572,15 @@ public class MainActivity extends Activity {
 
     private static String metaLine(final DownloadService.Task task) {
         final StringBuilder s = new StringBuilder()
-                .append(task.formatLabel).append("  ")
+                .append(task.formatLabel()).append("  ")
                 .append(task.state.label.toUpperCase(Locale.US));
 
-        if (task.state.active() && task.total > 0) {
+        if (task.state.transferring() && task.total > 0) {
             s.append("  ").append(Ui.bytes(task.done))
                     .append(" / ").append(Ui.bytes(task.total));
+            if (task.bytesPerSecond > 0) {
+                s.append("  ").append(Ui.bytes(task.bytesPerSecond)).append("/s");
+            }
         } else if (task.state == DownloadService.State.PAUSED && task.done > 0) {
             s.append("  ").append(Ui.bytes(task.done)).append(" so far");
         }
@@ -594,44 +624,106 @@ public class MainActivity extends Activity {
 
     private void fetch(final String url) {
         if (url.isEmpty()) {
-            status.setText("Paste a YouTube link above, then tap Fetch.");
+            status.setText("Paste a link, or share one to this app.");
             return;
         }
 
+        pageUrl = url;
         status.setText("Fetching…");
         options.clear();
+        playlist.clear();
+        audioTracks.clear();
+        audioAdapter.clear();
+        audioSpinner.setVisibility(View.GONE);
         formatAdapter.notifyDataSetChanged();
 
         executor.execute(() -> {
             try {
-                final StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, url);
-                main.post(() -> show(info));
+                // A /watch?v=X&list=Y URL is a video that happens to sit in a playlist, and
+                // the link handler agrees — only a real playlist URL comes back PLAYLIST.
+                if (linkType(url) == StreamingService.LinkType.PLAYLIST) {
+                    fetchPlaylist(url);
+                } else {
+                    final StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, url);
+                    main.post(() -> showVideo(info));
+                }
             } catch (final Exception e) {
-                main.post(() -> status.setText("Couldn't read that video: " + e.getMessage()));
+                main.post(() -> status.setText("Couldn't read that link: " + e.getMessage()));
             }
         });
     }
 
-    private void show(final StreamInfo info) {
-        videoTitle = sanitize(info.getName());
-
-        // Merge-eligible audio: AAC in an .m4a container, because that's what MediaMuxer
-        // accepts alongside H.264 in an MP4. Ranked best-first so the spinner defaults well.
-        audioTracks.clear();
-        audioAdapter.clear();
-        for (final AudioStream as : info.getAudioStreams()) {
-            if (as.getDeliveryMethod() != DeliveryMethod.PROGRESSIVE_HTTP) {
-                continue;
-            }
-            if (as.getFormat() != org.schabi.newpipe.extractor.MediaFormat.M4A) {
-                continue;
-            }
-            audioTracks.add(as);
+    private static StreamingService.LinkType linkType(final String url) {
+        try {
+            return ServiceList.YouTube.getLinkTypeByUrl(url);
+        } catch (final Exception e) {
+            return StreamingService.LinkType.NONE;
         }
-        Collections.sort(audioTracks, (a, b) -> Long.compare(rank(b), rank(a)));
+    }
 
+    private void fetchPlaylist(final String url) throws Exception {
+        final PlaylistInfo info = PlaylistInfo.getInfo(ServiceList.YouTube, url);
+        final List<Entry> entries = new ArrayList<>();
+
+        for (final StreamInfoItem item : info.getRelatedItems()) {
+            entries.add(new Entry(item.getUrl(), Streams.sanitize(item.getName())));
+        }
+
+        // Each page is another round trip, so there's a cap. A 3000-video playlist isn't
+        // something to sit through on a phone.
+        Page next = info.getNextPage();
+        while (next != null && entries.size() < PLAYLIST_CAP) {
+            main.post(() -> status.setText("Fetching playlist… " + entries.size() + " so far"));
+            final ListExtractor.InfoItemsPage<StreamInfoItem> more =
+                    PlaylistInfo.getMoreItems(ServiceList.YouTube, url, next);
+            for (final StreamInfoItem item : more.getItems()) {
+                entries.add(new Entry(item.getUrl(), Streams.sanitize(item.getName())));
+            }
+            next = more.getNextPage();
+        }
+
+        main.post(() -> showPlaylist(info.getName(), entries));
+    }
+
+    /**
+     * A playlist offers target qualities rather than actual streams: forty videos don't
+     * share a format list, so the choice has to be an intention that each task resolves for
+     * itself when its turn comes.
+     */
+    private void showPlaylist(final String name, final List<Entry> entries) {
+        playlist.clear();
+        playlist.addAll(entries);
+
+        if (entries.isEmpty()) {
+            status.setText("That playlist came back empty.");
+            formatAdapter.notifyDataSetChanged();
+            return;
+        }
+
+        status.setText(name + "\n" + entries.size() + " videos"
+                + (entries.size() >= PLAYLIST_CAP ? " (capped)" : "")
+                + "\n\nPick a target quality — each video gets the best at or below it.");
+
+        for (final int height : new int[]{2160, 1080, 720, 480, 360}) {
+            options.add(new Option(height + "p",
+                    "merge with audio · queue " + entries.size(),
+                    new DownloadService.Spec(DownloadService.Kind.MERGE, height, null,
+                            height + "p"),
+                    null, null, "mp4", "video/mp4"));
+        }
+        options.add(new Option("Audio", "best track · queue " + entries.size(),
+                new DownloadService.Spec(DownloadService.Kind.AUDIO, 0, null, "Audio"),
+                null, null, "m4a", "audio/mp4"));
+
+        formatAdapter.notifyDataSetChanged();
+    }
+
+    private void showVideo(final StreamInfo info) {
+        videoTitle = Streams.sanitize(info.getName());
+
+        audioTracks.addAll(Streams.mergeAudio(info));
         for (final AudioStream as : audioTracks) {
-            audioAdapter.add(trackLabel(as));
+            audioAdapter.add(Streams.trackLabel(as));
         }
         audioAdapter.notifyDataSetChanged();
         audioSpinner.setVisibility(audioTracks.isEmpty() ? View.GONE : View.VISIBLE);
@@ -642,49 +734,31 @@ public class MainActivity extends Activity {
         status.setText(info.getName() + "\n" + info.getUploaderName()
                 + (audioTracks.isEmpty() ? "" : "\n\nAudio for merges ↓"));
 
-        // High resolutions live here: video with no audio track at all. Each gets merged
-        // with whichever track is selected in the spinner when it's queued.
-        final List<VideoStream> videoOnly = new ArrayList<>();
-        for (final VideoStream vs : info.getVideoOnlyStreams()) {
-            if (vs.getDeliveryMethod() != DeliveryMethod.PROGRESSIVE_HTTP) {
-                continue;
-            }
-            // MPEG-4 only. YouTube also serves WebM/VP9 at these resolutions, but pairing
-            // VP9 with AAC needs a WebM muxer and a different audio choice — two containers
-            // to reason about instead of one, for no visible gain.
-            if (vs.getFormat() != org.schabi.newpipe.extractor.MediaFormat.MPEG_4) {
-                continue;
-            }
-            videoOnly.add(vs);
-        }
-        Collections.sort(videoOnly,
-                (a, b) -> heightOf(b.getResolution()) - heightOf(a.getResolution()));
-
         if (!audioTracks.isEmpty()) {
-            for (final VideoStream vs : videoOnly) {
+            for (final VideoStream vs : Streams.videoOnly(info)) {
+                final int height = Streams.heightOf(vs.getResolution());
                 options.add(new Option(vs.getResolution(),
-                        nameOf(vs.getFormat()) + " · merge with audio",
-                        vs.getContent(), true, "mp4", "video/mp4"));
+                        Streams.formatName(vs.getFormat()) + " · merge with audio",
+                        new DownloadService.Spec(DownloadService.Kind.MERGE, height, null,
+                                vs.getResolution()),
+                        vs.getContent(), null, "mp4", "video/mp4"));
             }
         }
 
-        // Muxed: video and audio already in one file. Tops out at 360p on most videos,
-        // occasionally 720p.
-        for (final VideoStream vs : info.getVideoStreams()) {
-            if (vs.getDeliveryMethod() != DeliveryMethod.PROGRESSIVE_HTTP) {
-                continue;
-            }
+        for (final VideoStream vs : Streams.muxed(info)) {
             options.add(new Option(vs.getResolution(),
-                    nameOf(vs.getFormat()) + " · direct, no merge",
-                    vs.getContent(), false, suffixOf(vs.getFormat(), "mp4"), "video/mp4"));
+                    Streams.formatName(vs.getFormat()) + " · direct, no merge",
+                    new DownloadService.Spec(DownloadService.Kind.MUXED,
+                            Streams.heightOf(vs.getResolution()), null, vs.getResolution()),
+                    vs.getContent(), null, Streams.suffix(vs.getFormat(), "mp4"), "video/mp4"));
         }
 
-        for (final AudioStream as : info.getAudioStreams()) {
-            if (as.getDeliveryMethod() != DeliveryMethod.PROGRESSIVE_HTTP) {
-                continue;
-            }
-            options.add(new Option("Audio", trackLabel(as) + " · " + nameOf(as.getFormat()),
-                    as.getContent(), false, suffixOf(as.getFormat(), "m4a"), "audio/mp4"));
+        for (final AudioStream as : Streams.allAudio(info)) {
+            options.add(new Option("Audio",
+                    Streams.trackLabel(as) + " · " + Streams.formatName(as.getFormat()),
+                    new DownloadService.Spec(DownloadService.Kind.AUDIO, 0,
+                            as.getAudioTrackId(), "Audio"),
+                    as.getContent(), null, Streams.suffix(as.getFormat(), "m4a"), "audio/mp4"));
         }
 
         if (options.isEmpty()) {
@@ -697,9 +771,21 @@ public class MainActivity extends Activity {
     // ---------------------------------------------------------------- enqueue
 
     private void enqueue(final Option option) {
-        String audioUrl = null;
+        if (!playlist.isEmpty()) {
+            for (final Entry entry : playlist) {
+                DownloadService.enqueue(this,
+                        new DownloadService.Task(entry.url, entry.title, option.spec));
+            }
+            Toast.makeText(this, "Queued " + playlist.size(), Toast.LENGTH_SHORT).show();
+            refreshQueue();
+            selectTab(false);
+            return;
+        }
 
-        if (option.needsMerge) {
+        String audioUrl = option.audioUrl;
+        DownloadService.Spec spec = option.spec;
+
+        if (option.spec.kind == DownloadService.Kind.MERGE) {
             // Read the spinner here rather than at fetch time, so changing the track
             // actually changes what gets queued.
             final int selected = audioSpinner.getSelectedItemPosition();
@@ -707,111 +793,60 @@ public class MainActivity extends Activity {
                 status.setText("Pick an audio track first.");
                 return;
             }
-            audioUrl = audioTracks.get(selected).getContent();
+            final AudioStream track = audioTracks.get(selected);
+            audioUrl = track.getContent();
+            // Carry the id so a re-resolve after expiry lands on the same track.
+            spec = new DownloadService.Spec(DownloadService.Kind.MERGE, option.spec.height,
+                    track.getAudioTrackId(), option.spec.label);
         }
 
-        DownloadService.enqueue(this, new DownloadService.Task(
-                videoTitle, option.videoUrl, audioUrl,
-                option.extension, option.mimeType, option.primary));
+        final DownloadService.Task task =
+                new DownloadService.Task(pageUrl, videoTitle, spec);
+        task.preResolve(option.videoUrl, audioUrl, option.extension, option.mimeType);
+        DownloadService.enqueue(this, task);
 
         Toast.makeText(this, "Queued", Toast.LENGTH_SHORT).show();
         refreshQueue();
         selectTab(false);
     }
 
-    // ---------------------------------------------------------------- helpers
+    // ---------------------------------------------------------------- models
 
-    /** One entry in the format list. needsMerge means it has no audio of its own. */
+    /** A playlist member: enough to queue it, not enough to download it. */
+    private static final class Entry {
+        final String url;
+        final String title;
+
+        Entry(final String url, final String title) {
+            this.url = url;
+            this.title = title;
+        }
+    }
+
+    /**
+     * One row in the format list. For a single video the URLs are already resolved, since
+     * extraction is what produced this list. For a playlist they're null and every task
+     * resolves itself.
+     */
     private static final class Option {
         final String primary;
         final String detail;
+        final DownloadService.Spec spec;
         final String videoUrl;
-        final boolean needsMerge;
+        final String audioUrl;
         final String extension;
         final String mimeType;
 
-        Option(final String primary, final String detail, final String videoUrl,
-               final boolean needsMerge, final String extension, final String mimeType) {
+        Option(final String primary, final String detail, final DownloadService.Spec spec,
+               final String videoUrl, final String audioUrl, final String extension,
+               final String mimeType) {
             this.primary = primary;
             this.detail = detail;
+            this.spec = spec;
             this.videoUrl = videoUrl;
-            this.needsMerge = needsMerge;
+            this.audioUrl = audioUrl;
             this.extension = extension;
             this.mimeType = mimeType;
         }
-    }
-
-    /**
-     * Bitrate alone isn't enough. YouTube ships dubbed audio tracks next to the original,
-     * often at identical bitrates, so ranking on kbps would pick whichever came first — a
-     * coin flip between English and a dub. The original wins outright; bitrate breaks ties.
-     * If YouTube didn't tag the tracks, everything scores equal and the spinner is the only
-     * thing standing between you and a random language.
-     */
-    private static long rank(final AudioStream stream) {
-        final AudioTrackType type = stream.getAudioTrackType();
-        final long originalBonus = type == AudioTrackType.ORIGINAL ? 1_000_000L : 0L;
-        return originalBonus + Math.max(0, stream.getAverageBitrate());
-    }
-
-    /**
-     * Deliberately spells out the track type. If every entry reads "untagged", YouTube sent
-     * no track metadata, rank() had nothing to work with, and the choice is genuinely yours.
-     */
-    private static String trackLabel(final AudioStream stream) {
-        final String name = stream.getAudioTrackName();
-        final Locale locale = stream.getAudioLocale();
-
-        final String who;
-        if (name != null && !name.isEmpty()) {
-            who = name;
-        } else if (locale != null) {
-            who = locale.getDisplayName();
-        } else {
-            who = "Track";
-        }
-
-        final AudioTrackType type = stream.getAudioTrackType();
-        final String kind = type == null ? "untagged" : type.name().toLowerCase(Locale.US);
-        final String rate = " · " + stream.getAverageBitrate() + " kbps";
-
-        // YouTube's track names frequently already contain the word — "English (US) original"
-        // becoming "English (US) original (original)" is just a stutter. Only add the marker
-        // when it says something the name doesn't, which is exactly when it matters most:
-        // an untagged track the ranking couldn't reason about.
-        if (who.toLowerCase(Locale.US).contains(kind)) {
-            return who + rate;
-        }
-        return who + " (" + kind + ")" + rate;
-    }
-
-    /** "1080p60" -> 1080, for sorting. */
-    private static int heightOf(final String resolution) {
-        if (resolution == null) {
-            return 0;
-        }
-        int end = 0;
-        while (end < resolution.length() && Character.isDigit(resolution.charAt(end))) {
-            end++;
-        }
-        return end == 0 ? 0 : Integer.parseInt(resolution.substring(0, end));
-    }
-
-    private static String nameOf(final org.schabi.newpipe.extractor.MediaFormat format) {
-        return format == null ? "unknown" : format.getName();
-    }
-
-    private static String suffixOf(final org.schabi.newpipe.extractor.MediaFormat format,
-                                   final String fallback) {
-        return format == null ? fallback : format.getSuffix();
-    }
-
-    /** Video titles routinely contain characters that are illegal in filenames. */
-    private static String sanitize(final String name) {
-        final String cleaned = name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
-        if (cleaned.isEmpty()) {
-            return "video";
-        }
-        return cleaned.length() > 100 ? cleaned.substring(0, 100) : cleaned;
     }
 }

@@ -81,6 +81,29 @@ The limit worth knowing: YouTube's stream URLs expire after a few hours. Pause o
 resume will fail with a 403, because the URL is stale rather than the file being wrong.
 Re-fetch the video and queue it again.
 
+## Why a Task is a page URL and not two URLs
+
+Playlists and expiry-proof pause look like separate features and are the same one.
+
+A playlist item is queued before it's ever been extracted — you pick 1080p once for forty
+videos and none of them have stream URLs yet. A task paused overnight has stream URLs that
+have since expired. Both need the same thing: a task that knows *what was asked for* and can
+work out the URLs whenever it needs them.
+
+So a `Task` is a page URL plus a `Spec` — kind, target height, audio track — and stream URLs
+are a cache. Single videos arrive pre-resolved because extraction is what drew the list;
+playlist items arrive with nothing; expired tasks throw theirs away and resolve again. One
+mechanism, three situations.
+
+`Streams` holds the selection logic because both sides now need it and they must agree. The
+activity uses it to show you the options, the service to re-derive them later. If they ever
+disagreed you'd pick 1080p and silently get something else.
+
+**The hazard this creates:** resume trusts the partial file's length as its offset. A fresh
+URL is supposed to serve identical bytes for the same itag, and does — but if it ever didn't,
+appending to the old partial would produce a corrupt file with no error anywhere. So the byte
+length from the first attempt is recorded and re-checked; a mismatch fails loudly instead.
+
 ## The queue
 
 Everything goes through `DownloadService`, a foreground service — including single-file
@@ -123,9 +146,10 @@ download arrow hitting a floor the other.
 
 ## Known limits
 
-- MPEG-4 video only for merging. No WebM/VP9, no HLS, no live streams.
-- One task at a time — no parallel downloads.
-- No playlists.
+- MPEG-4 with a muxable codec for merging. AV1 is offered only on Android 12+, since
+  MediaMuxer couldn't put it in an MP4 before that. No WebM/VP9, no HLS, no live streams.
+- Playlists are capped at 200 items — each page is another round trip.
+- One task at a time.
 - Debug signing. If you switch on `minifyEnabled` for a release build later, you need
   ProGuard keep rules for Rhino or signature deobfuscation gets stripped and the app
   breaks in release only.

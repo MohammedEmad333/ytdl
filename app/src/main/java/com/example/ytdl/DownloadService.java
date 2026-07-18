@@ -17,7 +17,13 @@ import android.media.MediaMuxer;
 import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.SystemClock;
 import android.provider.MediaStore;
+
+import org.schabi.newpipe.extractor.ServiceList;
+import org.schabi.newpipe.extractor.stream.AudioStream;
+import org.schabi.newpipe.extractor.stream.StreamInfo;
+import org.schabi.newpipe.extractor.stream.VideoStream;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -49,8 +55,41 @@ public class DownloadService extends Service {
     public static final String ACTION_PAUSE = "pause";
     public static final String ACTION_RESUME = "resume";
 
+    /** What kind of file was asked for. */
+    public enum Kind {
+        MERGE,   // video-only stream + a chosen audio track, muxed together
+        MUXED,   // a progressive stream that already has audio
+        AUDIO    // audio track on its own
+    }
+
+    /**
+     * What the user asked for, in terms that survive the stream URLs expiring.
+     *
+     * This is the point of the whole redesign. A Task used to *be* two URLs; now it's a page
+     * plus an intention, and the URLs are a cache. That's what lets a playlist item exist
+     * before it's ever been extracted, and lets a task paused overnight re-derive itself
+     * rather than fail.
+     */
+    public static final class Spec {
+        public final Kind kind;
+        /** Target height for MERGE/MUXED. Nearest at or below wins — see Streams.pickHeight. */
+        public final int height;
+        /** Explicitly chosen track, or null for whatever ranks best on the day. */
+        public final String audioTrackId;
+        public final String label;
+
+        public Spec(final Kind kind, final int height, final String audioTrackId,
+                    final String label) {
+            this.kind = kind;
+            this.height = height;
+            this.audioTrackId = audioTrackId;
+            this.label = label;
+        }
+    }
+
     public enum State {
         QUEUED("Queued"),
+        RESOLVING("Resolving"),
         VIDEO("Video"),
         AUDIO("Audio"),
         MERGING("Merging"),
@@ -72,36 +111,67 @@ public class DownloadService extends Service {
 
         /** A worker thread is inside this task right now. */
         public boolean active() {
-            return this == VIDEO || this == AUDIO || this == MERGING || this == SAVING;
+            return this == RESOLVING || this == VIDEO || this == AUDIO
+                    || this == MERGING || this == SAVING;
+        }
+
+        /** Transferring bytes, so a byte count and a rate mean something. */
+        public boolean transferring() {
+            return this == VIDEO || this == AUDIO;
         }
     }
 
     /** A queued download. Mutable fields are volatile: the worker writes, the UI polls. */
     public static final class Task {
         public final long id = NEXT_ID.getAndIncrement();
-        public final String title;
-        public final String videoUrl;
-        /** Null means the file already has audio and needs no merge. */
-        public final String audioUrl;
-        public final String extension;
-        public final String mimeType;
-        public final String formatLabel;
+        /** The durable identity. Everything else can be re-derived from this. */
+        public final String pageUrl;
+        public final Spec spec;
+
+        /** Provisional for playlist items until the worker resolves them. */
+        public volatile String title;
+
+        // Cache, not identity. Null means "not resolved yet"; stale means "resolve again".
+        volatile String videoUrl;
+        volatile String audioUrl;
+        volatile String extension = "mp4";
+        volatile String mimeType = "video/mp4";
+
+        /**
+         * Byte lengths from the first successful attempt, so a re-derived URL that serves
+         * something different fails loudly instead of corrupting the partial on disk.
+         */
+        volatile long expectedVideoBytes = -1;
+        volatile long expectedAudioBytes = -1;
 
         public volatile State state = State.QUEUED;
         public volatile long done;
         public volatile long total = -1;
+        public volatile long bytesPerSecond;
         public volatile String error;
         public volatile boolean cancelled;
         public volatile boolean pauseRequested;
 
-        public Task(final String title, final String videoUrl, final String audioUrl,
-                    final String extension, final String mimeType, final String formatLabel) {
+        long rateAt;
+        long rateBytes;
+
+        public Task(final String pageUrl, final String title, final Spec spec) {
+            this.pageUrl = pageUrl;
             this.title = title;
+            this.spec = spec;
+        }
+
+        /** Pre-resolved by the activity, which already extracted to show you the list. */
+        public void preResolve(final String videoUrl, final String audioUrl,
+                               final String extension, final String mimeType) {
             this.videoUrl = videoUrl;
             this.audioUrl = audioUrl;
             this.extension = extension;
             this.mimeType = mimeType;
-            this.formatLabel = formatLabel;
+        }
+
+        public String formatLabel() {
+            return spec.label;
         }
 
         public int percent() {
@@ -304,10 +374,6 @@ public class DownloadService extends Service {
     // ---------------------------------------------------------------- one task
 
     private void process(final Task task) {
-        final File video = videoTemp(this, task);
-        final File audio = audioTemp(this, task);
-        final File merged = mergedTemp(this, task);
-
         final Net.Control control = () -> {
             if (task.cancelled) {
                 throw new Net.Cancelled();
@@ -318,30 +384,23 @@ public class DownloadService extends Service {
         };
 
         try {
-            // Both stages re-run from the top on resume. A completed stage costs one request
-            // that comes back 416, which fetchToFile reads as "already have it all".
-            task.state = State.VIDEO;
-            Net.fetchToFile(task.videoUrl, video, (d, t) -> report(task, d, t), control);
+            // Playlist items arrive with nothing but a page URL and an intention.
+            if (task.videoUrl == null) {
+                resolve(task);
+            }
 
-            if (task.audioUrl != null) {
-                task.state = State.AUDIO;
-                task.done = 0;
-                task.total = -1;
-                Net.fetchToFile(task.audioUrl, audio, (d, t) -> report(task, d, t), control);
-
-                control.checkpoint();
-                task.state = State.MERGING;
-                update(task);
-                mux(video, audio, merged);
-
-                task.state = State.SAVING;
-                update(task);
-                publish(merged, task.title + ".mp4", "video/mp4");
-            } else {
-                control.checkpoint();
-                task.state = State.SAVING;
-                update(task);
-                publish(video, task.title + "." + task.extension, task.mimeType);
+            try {
+                transfer(task, control);
+            } catch (final IOException e) {
+                // A paused task can sit for hours and YouTube's URLs don't last that long.
+                // The bytes on disk are still good — same itag, same content — so re-derive
+                // the URLs and carry on from where it stopped rather than starting over.
+                if (Net.isStale(e) && !task.cancelled && !task.pauseRequested) {
+                    resolve(task);
+                    transfer(task, control);
+                } else {
+                    throw e;
+                }
             }
 
             task.state = State.DONE;
@@ -359,6 +418,109 @@ public class DownloadService extends Service {
             }
             update(task);
         }
+    }
+
+    /**
+     * Turns the page URL and the spec back into stream URLs.
+     *
+     * Runs in two situations that look unrelated but aren't: a playlist item that was queued
+     * without ever being extracted, and a task whose URLs expired while it sat paused. Both
+     * are the same question — "what should this be, today?" — which is why the Task carries
+     * an intention rather than a pair of URLs.
+     */
+    private void resolve(final Task task) throws Exception {
+        task.state = State.RESOLVING;
+        update(task);
+
+        Net.ensureExtractor();
+        final StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, task.pageUrl);
+        task.title = Streams.sanitize(info.getName());
+
+        switch (task.spec.kind) {
+            case AUDIO: {
+                final AudioStream a = Streams.pickAudio(
+                        Streams.allAudio(info), task.spec.audioTrackId);
+                if (a == null) {
+                    throw new IOException("no audio stream available");
+                }
+                task.preResolve(a.getContent(), null,
+                        Streams.suffix(a.getFormat(), "m4a"), "audio/mp4");
+                break;
+            }
+            case MUXED: {
+                final VideoStream v = Streams.pickHeight(Streams.muxed(info), task.spec.height);
+                if (v == null) {
+                    throw new IOException("no muxed stream available");
+                }
+                task.preResolve(v.getContent(), null,
+                        Streams.suffix(v.getFormat(), "mp4"), "video/mp4");
+                break;
+            }
+            default: {
+                final VideoStream v = Streams.pickHeight(
+                        Streams.videoOnly(info), task.spec.height);
+                final AudioStream a = Streams.pickAudio(
+                        Streams.mergeAudio(info), task.spec.audioTrackId);
+                if (v == null) {
+                    throw new IOException("no muxable video at that quality");
+                }
+                if (a == null) {
+                    throw new IOException("no AAC track to merge with");
+                }
+                task.preResolve(v.getContent(), a.getContent(), "mp4", "video/mp4");
+                break;
+            }
+        }
+    }
+
+    private void transfer(final Task task, final Net.Control control) throws Exception {
+        final File video = videoTemp(this, task);
+        final File audio = audioTemp(this, task);
+        final File merged = mergedTemp(this, task);
+
+        // Both stages re-run from the top on resume. A completed stage costs one request that
+        // comes back 416, which fetchToFile reads as "already have it all".
+        stage(task, State.VIDEO);
+        Net.fetchToFile(task.videoUrl, video, task.expectedVideoBytes, (done, total) -> {
+            if (total > 0) {
+                task.expectedVideoBytes = total;
+            }
+            report(task, done, total);
+        }, control);
+
+        if (task.audioUrl != null) {
+            stage(task, State.AUDIO);
+            Net.fetchToFile(task.audioUrl, audio, task.expectedAudioBytes, (done, total) -> {
+                if (total > 0) {
+                    task.expectedAudioBytes = total;
+                }
+                report(task, done, total);
+            }, control);
+
+            control.checkpoint();
+            task.state = State.MERGING;
+            update(task);
+            mux(video, audio, merged);
+
+            task.state = State.SAVING;
+            update(task);
+            publish(merged, task.title + ".mp4", "video/mp4");
+        } else {
+            control.checkpoint();
+            task.state = State.SAVING;
+            update(task);
+            publish(video, task.title + "." + task.extension, task.mimeType);
+        }
+    }
+
+    private void stage(final Task task, final State state) {
+        task.state = state;
+        task.done = 0;
+        task.total = -1;
+        task.bytesPerSecond = 0;
+        task.rateAt = 0;
+        task.rateBytes = 0;
+        update(task);
     }
 
     private static File videoTemp(final Context c, final Task t) {
@@ -384,6 +546,22 @@ public class DownloadService extends Service {
     private void report(final Task task, final long done, final long total) {
         task.done = done;
         task.total = total;
+
+        // A one-second window: long enough not to jitter, short enough to react. The whole
+        // app is a transfer monitor that until now couldn't report a transfer rate.
+        final long now = SystemClock.elapsedRealtime();
+        if (task.rateAt == 0) {
+            task.rateAt = now;
+            task.rateBytes = done;
+        } else {
+            final long elapsed = now - task.rateAt;
+            if (elapsed >= 1000) {
+                task.bytesPerSecond = (done - task.rateBytes) * 1000 / elapsed;
+                task.rateAt = now;
+                task.rateBytes = done;
+            }
+        }
+
         // The system rate-limits notifications if they're hammered, and the UI polls anyway.
         if (task.percent() % 2 == 0) {
             update(task);
@@ -399,9 +577,12 @@ public class DownloadService extends Service {
         }
 
         final StringBuilder text = new StringBuilder(task.state.label);
-        if (task.state.active() && task.total > 0) {
+        if (task.state.transferring() && task.total > 0) {
             text.append(' ').append(Ui.bytes(task.done))
                     .append(" / ").append(Ui.bytes(task.total));
+            if (task.bytesPerSecond > 0) {
+                text.append(" · ").append(Ui.bytes(task.bytesPerSecond)).append("/s");
+            }
         }
         if (waiting > 0) {
             text.append(" · ").append(waiting).append(" waiting");

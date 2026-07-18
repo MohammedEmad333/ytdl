@@ -44,6 +44,21 @@ public final class Net {
     private Net() {
     }
 
+    private static boolean extractorReady;
+
+    /**
+     * NewPipe.init sets static state and must run once before any extraction. Both the
+     * activity and the service extract now — the service resolves playlist items and
+     * re-derives expired URLs — so neither can assume the other got here first.
+     */
+    public static synchronized void ensureExtractor() {
+        if (!extractorReady) {
+            org.schabi.newpipe.extractor.NewPipe.init(new OkHttpDownloader(),
+                    new org.schabi.newpipe.extractor.localization.Localization("en", "US"));
+            extractorReady = true;
+        }
+    }
+
     /** Thrown to unwind a transfer cleanly. Partial files are kept for resuming. */
     public static final class Paused extends IOException {
         public Paused() {
@@ -69,13 +84,29 @@ public final class Net {
     }
 
     /**
+     * A stream URL that's no longer valid. YouTube's expire after a few hours, so this is
+     * what a download paused overnight hits on resume — the URL is stale, not the file.
+     */
+    public static boolean isStale(final IOException e) {
+        final String message = e.getMessage();
+        return message != null && (message.contains("HTTP 403") || message.contains("HTTP 401"));
+    }
+
+    /**
      * Downloads to dest, resuming automatically if a partial file is already there.
      *
      * Resume works by trusting the file on disk: whatever length it has is the offset to ask
      * for next. That holds only because the file is append-only and is deleted outright on
      * cancel or failure — it's never left in a state where its length lies about what's in it.
+     *
+     * expectedTotal is the other half of that guarantee, and it matters once URLs can be
+     * re-derived after expiry. A fresh URL is supposed to serve identical bytes for the same
+     * itag, and in practice does — but if it ever didn't, appending to the old partial would
+     * produce a corrupt file with no error anywhere. Pass the length recorded on the first
+     * attempt and a mismatch becomes a loud failure instead of a broken video. Pass -1 when
+     * nothing is known yet.
      */
-    public static void fetchToFile(final String url, final File dest,
+    public static void fetchToFile(final String url, final File dest, final long expectedTotal,
                                    final Progress progress, final Control control)
             throws IOException {
 
@@ -117,6 +148,13 @@ public final class Net {
                     if (total < 0) {
                         total = totalLength(response.header("Content-Range"),
                                 body.contentLength(), written);
+
+                        // A re-derived URL that reports a different length isn't the stream
+                        // we already have bytes from. Appending would corrupt silently.
+                        if (expectedTotal > 0 && total > 0 && total != expectedTotal) {
+                            throw new IOException("stream changed since it was queued ("
+                                    + expectedTotal + " -> " + total + " bytes)");
+                        }
                     }
 
                     try (InputStream in = body.byteStream()) {
