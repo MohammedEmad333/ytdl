@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    A play triangle turned to point down, sitting above a bar. Read one way it's a play
+    button; read the other it's a download arrow hitting a floor. The colour split is what
+    carries that: amber head, white floor.
+
+    Adaptive icons are a 108x108 canvas where only the middle ~66 is guaranteed visible —
+    launchers mask and parallax the rest. Everything here stays between 34 and 72.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#F0A030"
+        android:pathData="M37,33 L71,33 L54,61 Z" />
+
+    <path
+        android:fillColor="#E8EDF2"
+        android:pathData="M41,67 L67,67 A3,3 0 0 1 67,73 L41,73 A3,3 0 0 1 41,67 Z" />
+
+</vector>

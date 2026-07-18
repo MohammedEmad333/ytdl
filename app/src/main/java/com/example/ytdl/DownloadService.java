@@ -36,20 +36,26 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Runs the download queue.
  *
- * This is a foreground service rather than an executor in the activity because a queue that
- * dies when the screen goes away isn't a queue — and a notification needs something alive to
- * belong to. Everything goes through here now, including single-file downloads that used to
- * be handed to DownloadManager: two mechanisms meant two progress models and two ways to
- * behave when backgrounded, for no benefit.
+ * A foreground service rather than an executor in the activity, because a queue that dies
+ * with the screen isn't a queue and a notification needs something alive to belong to.
+ * Everything goes through here, including single-file downloads that once went to
+ * DownloadManager — two mechanisms meant two progress models and two backgrounding
+ * behaviours, which is worse than either alone.
  */
 public class DownloadService extends Service {
 
+    public static final String EXTRA_ACTION = "action";
+    public static final String EXTRA_TASK_ID = "taskId";
+    public static final String ACTION_PAUSE = "pause";
+    public static final String ACTION_RESUME = "resume";
+
     public enum State {
         QUEUED("Queued"),
-        VIDEO("Downloading video"),
-        AUDIO("Downloading audio"),
+        VIDEO("Video"),
+        AUDIO("Audio"),
         MERGING("Merging"),
         SAVING("Saving"),
+        PAUSED("Paused"),
         DONE("Saved"),
         FAILED("Failed"),
         CANCELLED("Cancelled");
@@ -62,6 +68,11 @@ public class DownloadService extends Service {
 
         public boolean finished() {
             return this == DONE || this == FAILED || this == CANCELLED;
+        }
+
+        /** A worker thread is inside this task right now. */
+        public boolean active() {
+            return this == VIDEO || this == AUDIO || this == MERGING || this == SAVING;
         }
     }
 
@@ -77,9 +88,11 @@ public class DownloadService extends Service {
         public final String formatLabel;
 
         public volatile State state = State.QUEUED;
-        public volatile int percent;
+        public volatile long done;
+        public volatile long total = -1;
         public volatile String error;
         public volatile boolean cancelled;
+        public volatile boolean pauseRequested;
 
         public Task(final String title, final String videoUrl, final String audioUrl,
                     final String extension, final String mimeType, final String formatLabel) {
@@ -89,6 +102,13 @@ public class DownloadService extends Service {
             this.extension = extension;
             this.mimeType = mimeType;
             this.formatLabel = formatLabel;
+        }
+
+        public int percent() {
+            if (total <= 0) {
+                return 0;
+            }
+            return (int) Math.min(100, done * 100 / total);
         }
     }
 
@@ -100,6 +120,8 @@ public class DownloadService extends Service {
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
 
+    // ---------------------------------------------------------------- api
+
     /** Copy for the UI to read without holding the lock while it draws. */
     public static List<Task> snapshot() {
         synchronized (TASKS) {
@@ -107,10 +129,47 @@ public class DownloadService extends Service {
         }
     }
 
+    public static Task byId(final long id) {
+        for (final Task t : snapshot()) {
+            if (t.id == id) {
+                return t;
+            }
+        }
+        return null;
+    }
+
     public static void enqueue(final Context context, final Task task) {
         TASKS.add(task);
-        final Intent intent = new Intent(context, DownloadService.class);
-        context.startForegroundService(intent);
+        wake(context, null, 0);
+    }
+
+    public static void pause(final Task task) {
+        task.pauseRequested = true;
+        // A queued task has no worker inside it to notice the flag, so move it directly.
+        if (task.state == State.QUEUED) {
+            task.state = State.PAUSED;
+        }
+    }
+
+    public static void resume(final Context context, final Task task) {
+        task.pauseRequested = false;
+        task.state = State.QUEUED;
+        wake(context, null, 0);
+    }
+
+    /**
+     * Partial files survive a pause and are discarded on cancel — resume trusts the file's
+     * length as its offset, so a stale partial left behind by a cancelled task would corrupt
+     * a later download of the same id. Hence the cleanup here for tasks nothing is running.
+     */
+    public static void cancel(final Context context, final Task task) {
+        task.cancelled = true;
+        final State current = task.state;
+        if (!current.active()) {
+            deleteTemps(context, task);
+            task.state = State.CANCELLED;
+        }
+        // If it is active, the worker's next checkpoint throws and cleans up there.
     }
 
     public static void clearFinished() {
@@ -126,12 +185,13 @@ public class DownloadService extends Service {
         }
     }
 
-    /** The worker checks this between chunks, so cancelling doesn't wait for the file. */
-    public static void cancel(final Task task) {
-        task.cancelled = true;
-        if (task.state == State.QUEUED) {
-            task.state = State.CANCELLED;
+    private static void wake(final Context context, final String action, final long taskId) {
+        final Intent intent = new Intent(context, DownloadService.class);
+        if (action != null) {
+            intent.putExtra(EXTRA_ACTION, action);
+            intent.putExtra(EXTRA_TASK_ID, taskId);
         }
+        context.startForegroundService(intent);
     }
 
     // ---------------------------------------------------------------- lifecycle
@@ -147,9 +207,21 @@ public class DownloadService extends Service {
 
     @Override
     public int onStartCommand(final Intent intent, final int flags, final int startId) {
-        // startForegroundService gives roughly five seconds to get here before the system
-        // kills the process, so this happens before anything slow.
-        startForegroundCompat(buildNotification("Starting…", null, 0, true));
+        // startForegroundService allows roughly five seconds to reach this before the system
+        // kills the process, so it happens before anything that might block.
+        startForegroundCompat(buildNotification("Downloads", "Starting…", 0, true, null));
+
+        if (intent != null && intent.hasExtra(EXTRA_ACTION)) {
+            final Task task = byId(intent.getLongExtra(EXTRA_TASK_ID, -1));
+            if (task != null) {
+                if (ACTION_PAUSE.equals(intent.getStringExtra(EXTRA_ACTION))) {
+                    pause(task);
+                } else {
+                    task.pauseRequested = false;
+                    task.state = State.QUEUED;
+                }
+            }
+        }
 
         if (RUNNING.compareAndSet(false, true)) {
             WORKER.execute(this::drainQueue);
@@ -164,7 +236,7 @@ public class DownloadService extends Service {
 
     private void startForegroundCompat(final Notification notification) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            // Android 14 requires the type to be declared at start and to match the manifest.
+            // Android 14 requires the type at start, and it must match the manifest.
             startForeground(NOTIFICATION_ID, notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         } else {
@@ -189,7 +261,7 @@ public class DownloadService extends Service {
     private Task nextQueued() {
         synchronized (TASKS) {
             for (final Task t : TASKS) {
-                if (t.state == State.QUEUED && !t.cancelled) {
+                if (t.state == State.QUEUED && !t.cancelled && !t.pauseRequested) {
                     return t;
                 }
             }
@@ -200,50 +272,64 @@ public class DownloadService extends Service {
     private void finish() {
         int saved = 0;
         int failed = 0;
+        int paused = 0;
         for (final Task t : snapshot()) {
             if (t.state == State.DONE) {
                 saved++;
             } else if (t.state == State.FAILED) {
                 failed++;
+            } else if (t.state == State.PAUSED) {
+                paused++;
             }
         }
 
-        final String summary = failed == 0
-                ? saved + (saved == 1 ? " file saved" : " files saved")
-                : saved + " saved, " + failed + " failed";
+        final StringBuilder summary = new StringBuilder()
+                .append(saved).append(saved == 1 ? " file saved" : " files saved");
+        if (failed > 0) {
+            summary.append(" · ").append(failed).append(" failed");
+        }
+        if (paused > 0) {
+            summary.append(" · ").append(paused).append(" paused");
+        }
 
         // DETACH leaves the notification behind as a plain, dismissible summary rather than
-        // yanking it the instant the last file lands.
+        // yanking it the moment the last file lands.
         stopForeground(STOP_FOREGROUND_DETACH);
         getSystemService(NotificationManager.class).notify(NOTIFICATION_ID,
-                buildNotification("Downloads finished", summary, 0, false));
+                buildNotification(paused > 0 ? "Downloads paused" : "Downloads finished",
+                        summary.toString(), 0, false, null));
         stopSelf();
     }
 
     // ---------------------------------------------------------------- one task
 
     private void process(final Task task) {
-        final File video = new File(getCacheDir(), "v-" + task.id + ".part");
-        final File audio = new File(getCacheDir(), "a-" + task.id + ".part");
-        final File merged = new File(getCacheDir(), "m-" + task.id + ".mp4");
+        final File video = videoTemp(this, task);
+        final File audio = audioTemp(this, task);
+        final File merged = mergedTemp(this, task);
+
+        final Net.Control control = () -> {
+            if (task.cancelled) {
+                throw new Net.Cancelled();
+            }
+            if (task.pauseRequested) {
+                throw new Net.Paused();
+            }
+        };
 
         try {
-            if (task.audioUrl == null) {
-                task.state = State.VIDEO;
-                Net.fetchToFile(task.videoUrl, video, p -> report(task, p), () -> !task.cancelled);
+            // Both stages re-run from the top on resume. A completed stage costs one request
+            // that comes back 416, which fetchToFile reads as "already have it all".
+            task.state = State.VIDEO;
+            Net.fetchToFile(task.videoUrl, video, (d, t) -> report(task, d, t), control);
 
-                task.state = State.SAVING;
-                task.percent = 100;
-                update(task);
-                publish(video, task.title + "." + task.extension, task.mimeType);
-            } else {
-                task.state = State.VIDEO;
-                Net.fetchToFile(task.videoUrl, video, p -> report(task, p), () -> !task.cancelled);
-
+            if (task.audioUrl != null) {
                 task.state = State.AUDIO;
-                task.percent = 0;
-                Net.fetchToFile(task.audioUrl, audio, p -> report(task, p), () -> !task.cancelled);
+                task.done = 0;
+                task.total = -1;
+                Net.fetchToFile(task.audioUrl, audio, (d, t) -> report(task, d, t), control);
 
+                control.checkpoint();
                 task.state = State.MERGING;
                 update(task);
                 mux(video, audio, merged);
@@ -251,69 +337,120 @@ public class DownloadService extends Service {
                 task.state = State.SAVING;
                 update(task);
                 publish(merged, task.title + ".mp4", "video/mp4");
+            } else {
+                control.checkpoint();
+                task.state = State.SAVING;
+                update(task);
+                publish(video, task.title + "." + task.extension, task.mimeType);
             }
 
             task.state = State.DONE;
-            task.percent = 100;
+        } catch (final Net.Paused e) {
+            task.state = State.PAUSED;
+        } catch (final Net.Cancelled e) {
+            task.state = State.CANCELLED;
         } catch (final Exception e) {
-            if (task.cancelled) {
-                task.state = State.CANCELLED;
-            } else {
-                task.state = State.FAILED;
-                task.error = e.getMessage() == null ? e.toString() : e.getMessage();
-            }
+            task.state = State.FAILED;
+            task.error = e.getMessage() == null ? e.toString() : e.getMessage();
         } finally {
-            video.delete();
-            audio.delete();
-            merged.delete();
+            // The one case where temp files are kept: they're the resume point.
+            if (task.state != State.PAUSED) {
+                deleteTemps(this, task);
+            }
             update(task);
         }
     }
 
-    private void report(final Task task, final int percent) {
-        task.percent = percent;
-        // Notifications get rate-limited by the system if hammered, and the UI polls anyway.
-        if (percent % 2 == 0) {
+    private static File videoTemp(final Context c, final Task t) {
+        return new File(c.getCacheDir(), "v-" + t.id + ".part");
+    }
+
+    private static File audioTemp(final Context c, final Task t) {
+        return new File(c.getCacheDir(), "a-" + t.id + ".part");
+    }
+
+    private static File mergedTemp(final Context c, final Task t) {
+        return new File(c.getCacheDir(), "m-" + t.id + ".mp4");
+    }
+
+    private static void deleteTemps(final Context c, final Task t) {
+        videoTemp(c, t).delete();
+        audioTemp(c, t).delete();
+        mergedTemp(c, t).delete();
+    }
+
+    // ---------------------------------------------------------------- notification
+
+    private void report(final Task task, final long done, final long total) {
+        task.done = done;
+        task.total = total;
+        // The system rate-limits notifications if they're hammered, and the UI polls anyway.
+        if (task.percent() % 2 == 0) {
             update(task);
         }
     }
 
     private void update(final Task task) {
-        int remaining = 0;
+        int waiting = 0;
         for (final Task t : snapshot()) {
-            if (!t.state.finished()) {
-                remaining++;
+            if (t.state == State.QUEUED) {
+                waiting++;
             }
         }
-        final String queued = remaining > 1 ? " · " + (remaining - 1) + " waiting" : "";
+
+        final StringBuilder text = new StringBuilder(task.state.label);
+        if (task.state.active() && task.total > 0) {
+            text.append(' ').append(Ui.bytes(task.done))
+                    .append(" / ").append(Ui.bytes(task.total));
+        }
+        if (waiting > 0) {
+            text.append(" · ").append(waiting).append(" waiting");
+        }
+
         getSystemService(NotificationManager.class).notify(NOTIFICATION_ID,
-                buildNotification(task.title,
-                        task.state.label + " " + task.percent + "%" + queued,
-                        task.percent, true));
+                buildNotification(task.title, text.toString(), task.percent(), true, task));
     }
 
     private Notification buildNotification(final String title, final String text,
-                                           final int percent, final boolean ongoing) {
+                                           final int percent, final boolean ongoing,
+                                           final Task task) {
         final PendingIntent tap = PendingIntent.getActivity(this, 0,
                 new Intent(this, MainActivity.class),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
         final Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
-                // A framework icon: a real one would be a binary asset in the repo.
+                // A framework icon: a custom one would need a drawable, and the vector
+                // launcher icon isn't legible at status-bar size anyway.
                 .setSmallIcon(ongoing
                         ? android.R.drawable.stat_sys_download
                         : android.R.drawable.stat_sys_download_done)
                 .setContentTitle(title)
+                .setContentText(text)
                 .setContentIntent(tap)
                 .setOnlyAlertOnce(true)
                 .setOngoing(ongoing);
 
-        if (text != null) {
-            builder.setContentText(text);
-        }
         if (ongoing) {
             builder.setProgress(100, percent, percent <= 0);
         }
+
+        // Pausing matters most when you're not in the app, which is exactly when the
+        // notification is the only surface you have.
+        if (task != null && !task.state.finished()) {
+            final boolean paused = task.state == State.PAUSED;
+            final Intent action = new Intent(this, DownloadService.class)
+                    .putExtra(EXTRA_ACTION, paused ? ACTION_RESUME : ACTION_PAUSE)
+                    .putExtra(EXTRA_TASK_ID, task.id);
+            // Request code varies per task, or the system reuses one PendingIntent for all.
+            final PendingIntent pi = PendingIntent.getService(this, (int) task.id, action,
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            builder.addAction(new Notification.Action.Builder(
+                    android.graphics.drawable.Icon.createWithResource(this,
+                            paused ? android.R.drawable.ic_media_play
+                                    : android.R.drawable.ic_media_pause),
+                    paused ? "Resume" : "Pause", pi).build());
+        }
+
         return builder.build();
     }
 

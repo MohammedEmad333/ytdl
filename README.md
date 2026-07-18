@@ -62,6 +62,25 @@ still fights this one.
 The fix is nearly always bumping the NewPipeExtractor version in `app/build.gradle` and
 letting Actions rebuild — which you can do from a phone in about thirty seconds.
 
+## Pause and resume
+
+Pausing is nearly free, and by accident. Downloads were already chunked into 4 MB ranged
+requests to defeat YouTube's throttling, so stopping between chunks and later restarting from
+the partial file's length needs almost nothing extra.
+
+Resume trusts the length of the file on disk as the offset to ask for next. That's only safe
+because of one invariant: partial files are append-only, and they're deleted outright on
+cancel or failure. A file is never left in a state where its length lies about its contents.
+Break that and resumed downloads corrupt silently.
+
+A paused task re-runs from the top when resumed. An already-complete stage costs one request
+that returns 416, which `fetchToFile` reads as "already have it all" — so the video stage
+skips itself and the audio stage picks up where it stopped.
+
+The limit worth knowing: YouTube's stream URLs expire after a few hours. Pause overnight and
+resume will fail with a 403, because the URL is stale rather than the file being wrong.
+Re-fetch the video and queue it again.
+
 ## The queue
 
 Everything goes through `DownloadService`, a foreground service — including single-file
@@ -73,6 +92,25 @@ between chunks, so it stops in a second or so rather than after finishing the fi
 
 The activity polls the task list every 500ms while it's on screen. Polling rather than
 registering a listener: nothing to leak, and the service outlives the activity by design.
+
+## The look
+
+Dark, monospaced, dense — an instrument panel rather than a feed. The subject is codecs,
+containers, bitrates and byte counts, so it's built to read as machine data: mono for
+anything a machine produced, sans for prose. Amber means in transit and nothing else is
+allowed to use it.
+
+The one flourish is progress: a hairline rule under each row that fills, not a bar widget, so
+a queue reads as several lines advancing at different rates. It's two weighted views rather
+than a `ProgressBar` — weight 0 collapses to nothing, so 0% and 100% both work without a
+special case.
+
+Custom fonts are the obvious next lever and are deliberately absent: font files are binary.
+Monospace is a system face, which is why it carries the personality here.
+
+The launcher icon is an adaptive icon whose layers are vectors rather than the usual PNG set,
+for the same reason. A play triangle turned to point down over a bar: a play button one way, a
+download arrow hitting a floor the other.
 
 ## Known limits
 

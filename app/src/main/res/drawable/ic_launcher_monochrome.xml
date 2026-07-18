@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 13+ themed icons: the system tints this single-colour silhouette to match the
+    user's wallpaper, so the shape has to read without the amber/white split doing the work.
+    Solid white here — the launcher recolours it.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M37,33 L71,33 L54,61 Z" />
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M41,67 L67,67 A3,3 0 0 1 67,73 L41,73 A3,3 0 0 1 41,67 Z" />
+
+</vector>

@@ -29,6 +29,10 @@ public final class Net {
      * YouTube throttles a single long-lived GET on a stream URL to about playback speed —
      * the point is to stop a player buffering a whole video, and a downloader eats the same
      * limit. Each new ranged request gets a fresh budget, so never ask for much at once.
+     *
+     * That workaround turned out to buy pause/resume almost for free: the transfer is already
+     * a sequence of ranged requests, so stopping between them and later restarting from the
+     * partial file's length costs nothing extra.
      */
     private static final long CHUNK_BYTES = 4L * 1024 * 1024;
 
@@ -40,29 +44,48 @@ public final class Net {
     private Net() {
     }
 
-    /** Reports 0-100. Called often — keep implementations cheap. */
+    /** Thrown to unwind a transfer cleanly. Partial files are kept for resuming. */
+    public static final class Paused extends IOException {
+        public Paused() {
+            super("paused");
+        }
+    }
+
+    /** Thrown to unwind a transfer for good. Partial files are discarded. */
+    public static final class Cancelled extends IOException {
+        public Cancelled() {
+            super("cancelled");
+        }
+    }
+
+    /** Bytes so far and total, or -1 total while it's still unknown. */
     public interface Progress {
-        void onProgress(int percent);
+        void onProgress(long done, long total);
     }
 
-    /** True while the work should continue; lets a cancelled task stop mid-file. */
-    public interface Live {
-        boolean isLive();
+    /** Checked between chunks and between buffer reads. Throws to stop. */
+    public interface Control {
+        void checkpoint() throws Paused, Cancelled;
     }
 
+    /**
+     * Downloads to dest, resuming automatically if a partial file is already there.
+     *
+     * Resume works by trusting the file on disk: whatever length it has is the offset to ask
+     * for next. That holds only because the file is append-only and is deleted outright on
+     * cancel or failure — it's never left in a state where its length lies about what's in it.
+     */
     public static void fetchToFile(final String url, final File dest,
-                                   final Progress progress, final Live live)
+                                   final Progress progress, final Control control)
             throws IOException {
 
+        long written = dest.exists() ? dest.length() : 0;
         long total = -1;
-        long written = 0;
-        int lastShown = -1;
 
-        try (OutputStream out = new FileOutputStream(dest)) {
+        // Append, never truncate — the existing bytes are the resume point.
+        try (OutputStream out = new FileOutputStream(dest, true)) {
             while (total < 0 || written < total) {
-                if (!live.isLive()) {
-                    throw new IOException("cancelled");
-                }
+                control.checkpoint();
 
                 final long chunkStart = written;
 
@@ -75,9 +98,17 @@ public final class Net {
 
                 try (okhttp3.Response response = HTTP.newCall(request).execute()) {
                     final int code = response.code();
+
+                    // 416 means we asked to start past the end. On a resume that's just the
+                    // file already being complete — which is how a finished stage reports
+                    // itself when a paused task gets re-run from the top.
+                    if (code == 416 && written > 0) {
+                        return;
+                    }
                     if (code != 200 && code != 206) {
                         throw new IOException("HTTP " + code);
                     }
+
                     final ResponseBody body = response.body();
                     if (body == null) {
                         throw new IOException("empty response body");
@@ -85,26 +116,17 @@ public final class Net {
 
                     if (total < 0) {
                         total = totalLength(response.header("Content-Range"),
-                                body.contentLength());
+                                body.contentLength(), written);
                     }
 
                     try (InputStream in = body.byteStream()) {
                         final byte[] buffer = new byte[64 * 1024];
                         int read;
                         while ((read = in.read(buffer)) > 0) {
-                            if (!live.isLive()) {
-                                throw new IOException("cancelled");
-                            }
+                            control.checkpoint();
                             out.write(buffer, 0, read);
                             written += read;
-
-                            if (total > 0) {
-                                final int percent = (int) (written * 100 / total);
-                                if (percent != lastShown) {
-                                    lastShown = percent;
-                                    progress.onProgress(percent);
-                                }
-                            }
+                            progress.onProgress(written, total);
                         }
                     }
 
@@ -122,19 +144,24 @@ public final class Net {
         }
     }
 
-    /** Content-Range comes back as "bytes 0-4194303/52428800" — the tail is what we want. */
-    private static long totalLength(final String contentRange, final long bodyLength) {
+    /**
+     * Content-Range reads "bytes 4194304-8388607/52428800" — the tail is the full length,
+     * which is what's wanted, not the length of this one chunk. A plain 200 carries no
+     * Content-Range, and there the body is everything from where we already are.
+     */
+    private static long totalLength(final String contentRange, final long bodyLength,
+                                    final long alreadyWritten) {
         if (contentRange != null) {
             final int slash = contentRange.indexOf('/');
             if (slash >= 0) {
                 try {
                     return Long.parseLong(contentRange.substring(slash + 1).trim());
                 } catch (final NumberFormatException ignored) {
-                    // Unparseable — fall back to the body length below.
+                    // Unparseable — fall through.
                 }
             }
         }
-        return bodyLength;
+        return bodyLength < 0 ? -1 : alreadyWritten + bodyLength;
     }
 
     /**
