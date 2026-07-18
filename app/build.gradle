@@ -1,3 +1,4 @@
+// build-tag: 2 — bump to force a clean recompile when Gradle's cache holds stale classes
 plugins {
     id 'com.android.application'
 }
