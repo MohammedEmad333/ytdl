@@ -152,12 +152,11 @@ public final class PoToken {
             if (cached == null) {
                 return null;
             }
-            // Both poToken slots get the same content-bound token. The three-arg constructor
-            // is (playerRequestPoToken, streamingDataPoToken, visitorData): the first goes on
-            // the player request, the second on the streaming URLs. If the streaming URLs ever
-            // 403 while the player request succeeds, this is the line to revisit — it's the
-            // spot where a separate visitor-bound token would go.
-            return new PoTokenResult(cached.poToken, cached.poToken, cached.visitorData);
+            // Constructor order is (visitorData, playerRequestPoToken, streamingDataPoToken).
+            // Both poToken slots get the same content-bound token. If the streaming URLs ever
+            // 403 while the player request succeeds, this is the line to revisit — it's where
+            // a separate visitor-bound streaming token would go.
+            return new PoTokenResult(cached.visitorData, cached.poToken, cached.poToken);
         }
 
         @Nullable
@@ -168,15 +167,23 @@ public final class PoToken {
 
         @Nullable
         @Override
-        public PoTokenResult getWebEmbeddedClientPoToken(final String videoId) {
+        public PoTokenResult getWebEmbedClientPoToken(final String videoId) {
             return result();
         }
 
         @Nullable
         @Override
         public PoTokenResult getAndroidClientPoToken(final String videoId) {
-            // Leave the Android client alone — its integrity path differs, and feeding it a
-            // web-minted token tends to hurt more than help. Web is what unlocks the formats.
+            // Leave the Android client alone — its integrity path (DroidGuard) differs, and
+            // feeding it a web-minted token tends to hurt more than help. Web is what unlocks
+            // the adaptive formats, which is the whole point here.
+            return null;
+        }
+
+        @Nullable
+        @Override
+        public PoTokenResult getIosClientPoToken(final String videoId) {
+            // Same reasoning as Android: iOS uses its own attestation, not a web poToken.
             return null;
         }
     }
