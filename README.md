@@ -112,6 +112,25 @@ URL is supposed to serve identical bytes for the same itag, and does — but if 
 appending to the old partial would produce a corrupt file with no error anywhere. So the byte
 length from the first attempt is recorded and re-checked; a mismatch fails loudly instead.
 
+## The queue survives the process
+
+The queue is written to `queue.json` in the app's files dir on every state change, and read
+back by whichever of the activity or service is alive first.
+
+Without this, expiry-proof resume was a claim rather than a feature. The queue lived in a
+static list, so swiping the app away — or Android reclaiming the process, which is the norm
+overnight — took every paused task with it and left its partial files orphaned in cache
+forever. "Pause overnight" is exactly the case where the process doesn't survive.
+
+The nice part falls out of an invariant that already existed. A task that was mid-transfer
+when the process died has a valid partial on disk, because partials are append-only and are
+deleted only on cancel or failure. That is precisely the pause invariant — so a killed
+transfer and a paused one are the same situation, and restore identically. Any active state
+comes back as PAUSED and resumes correctly. Crash recovery came free.
+
+Stream URLs are persisted too, stale or not: if they still work a restored task saves a
+request, and if they don't the 403 path re-derives them anyway.
+
 ## The queue
 
 Everything goes through `DownloadService`, a foreground service — including single-file
@@ -157,6 +176,10 @@ download arrow hitting a floor the other.
 - MPEG-4 with a muxable codec for merging. AV1 is offered only on Android 12+, since
   MediaMuxer couldn't put it in an MP4 before that. No WebM/VP9, no HLS, no live streams.
 - Playlists are capped at 200 items — each page is another round trip.
+- Subtitles come out as TTML, not SRT. That's what YouTube's default format is through this
+  API; getting VTT or SRT means asking the extractor directly rather than via StreamInfo.
+- A task killed during SAVING leaves a pending MediaStore row behind. It's invisible and the
+  system reaps it after a week.
 - One task at a time.
 - Debug signing. If you switch on `minifyEnabled` for a release build later, you need
   ProGuard keep rules for Rhino or signature deobfuscation gets stripped and the app

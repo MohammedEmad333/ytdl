@@ -37,6 +37,7 @@ import org.schabi.newpipe.extractor.playlist.PlaylistInfo;
 import org.schabi.newpipe.extractor.stream.AudioStream;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.stream.StreamInfoItem;
+import org.schabi.newpipe.extractor.stream.SubtitlesStream;
 import org.schabi.newpipe.extractor.stream.VideoStream;
 
 import java.util.ArrayList;
@@ -87,6 +88,8 @@ public class MainActivity extends Activity {
     protected void onCreate(final Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Net.ensureExtractor();
+        // Either this or the service can be first alive in a fresh process.
+        DownloadService.ensureLoaded(this);
 
         setContentView(buildUi());
         selectTab(true);
@@ -431,7 +434,7 @@ public class MainActivity extends Activity {
         clear.setStateListAnimator(null);
         clear.setBackground(Ui.box(this, Color.TRANSPARENT, Ui.LINE, 6));
         clear.setOnClickListener(v -> {
-            DownloadService.clearFinished();
+            DownloadService.clearFinished(this);
             refreshQueue();
         });
         root.addView(clear, new LinearLayout.LayoutParams(
@@ -495,6 +498,8 @@ public class MainActivity extends Activity {
 
             if (!task.state.finished()) {
                 card.addView(controls(c, task));
+            } else if (task.state == DownloadService.State.FAILED) {
+                card.addView(retryControls(c, task));
             }
 
             final LinearLayout wrap = new LinearLayout(c);
@@ -540,7 +545,7 @@ public class MainActivity extends Activity {
             if (paused) {
                 DownloadService.resume(MainActivity.this, task);
             } else {
-                DownloadService.pause(task);
+                DownloadService.pause(MainActivity.this, task);
             }
             refreshQueue();
         }));
@@ -551,6 +556,22 @@ public class MainActivity extends Activity {
         }));
 
         return row;
+    }
+
+    /** A failed task keeps its page URL and spec, so retrying is just re-queuing it. */
+    private View retryControls(final Context c, final DownloadService.Task task) {
+        final LinearLayout row = new LinearLayout(c);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, Ui.dp(c, 10), 0, 0);
+        row.addView(smallButton(c, "Retry", Ui.ACCENT, v -> {
+            DownloadService.retry(MainActivity.this, task);
+            refreshQueue();
+        }));
+        return row;
+    }
+
+    private static String size(final long bytes) {
+        return bytes < 0 ? "" : " · " + Ui.bytes(bytes);
     }
 
     private View smallButton(final Context c, final String text, final int color,
@@ -707,12 +728,11 @@ public class MainActivity extends Activity {
         for (final int height : new int[]{2160, 1080, 720, 480, 360}) {
             options.add(new Option(height + "p",
                     "merge with audio · queue " + entries.size(),
-                    new DownloadService.Spec(DownloadService.Kind.MERGE, height, null,
-                            height + "p"),
+                    DownloadService.Spec.merge(height, null, height + "p"),
                     null, null, "mp4", "video/mp4"));
         }
         options.add(new Option("Audio", "best track · queue " + entries.size(),
-                new DownloadService.Spec(DownloadService.Kind.AUDIO, 0, null, "Audio"),
+                DownloadService.Spec.audio(null, "Audio"),
                 null, null, "m4a", "audio/mp4"));
 
         formatAdapter.notifyDataSetChanged();
@@ -734,31 +754,49 @@ public class MainActivity extends Activity {
         status.setText(info.getName() + "\n" + info.getUploaderName()
                 + (audioTracks.isEmpty() ? "" : "\n\nAudio for merges ↓"));
 
+        // Merged size is the video plus the audio it'll be paired with, so the number in
+        // the list is what actually lands on disk rather than half of it.
+        final long audioBytes = audioTracks.isEmpty() ? -1 : Streams.sizeOf(audioTracks.get(0));
+
         if (!audioTracks.isEmpty()) {
             for (final VideoStream vs : Streams.videoOnly(info)) {
                 final int height = Streams.heightOf(vs.getResolution());
+                final long videoBytes = Streams.sizeOf(vs);
+                final long combined = videoBytes < 0 || audioBytes < 0
+                        ? -1 : videoBytes + audioBytes;
                 options.add(new Option(vs.getResolution(),
-                        Streams.formatName(vs.getFormat()) + " · merge with audio",
-                        new DownloadService.Spec(DownloadService.Kind.MERGE, height, null,
-                                vs.getResolution()),
+                        Streams.formatName(vs.getFormat()) + " · merge with audio"
+                                + size(combined),
+                        DownloadService.Spec.merge(height, null, vs.getResolution()),
                         vs.getContent(), null, "mp4", "video/mp4"));
             }
         }
 
         for (final VideoStream vs : Streams.muxed(info)) {
             options.add(new Option(vs.getResolution(),
-                    Streams.formatName(vs.getFormat()) + " · direct, no merge",
-                    new DownloadService.Spec(DownloadService.Kind.MUXED,
-                            Streams.heightOf(vs.getResolution()), null, vs.getResolution()),
+                    Streams.formatName(vs.getFormat()) + " · direct, no merge"
+                            + size(Streams.sizeOf(vs)),
+                    DownloadService.Spec.muxed(Streams.heightOf(vs.getResolution()),
+                            vs.getResolution()),
                     vs.getContent(), null, Streams.suffix(vs.getFormat(), "mp4"), "video/mp4"));
         }
 
         for (final AudioStream as : Streams.allAudio(info)) {
             options.add(new Option("Audio",
-                    Streams.trackLabel(as) + " · " + Streams.formatName(as.getFormat()),
-                    new DownloadService.Spec(DownloadService.Kind.AUDIO, 0,
-                            as.getAudioTrackId(), "Audio"),
+                    Streams.trackLabel(as) + " · " + Streams.formatName(as.getFormat())
+                            + size(Streams.sizeOf(as)),
+                    DownloadService.Spec.audio(as.getAudioTrackId(), "Audio"),
                     as.getContent(), null, Streams.suffix(as.getFormat(), "m4a"), "audio/mp4"));
+        }
+
+        for (final SubtitlesStream sub : Streams.subtitles(info)) {
+            options.add(new Option("Subtitles",
+                    Streams.subtitleLabel(sub) + " · " + Streams.formatName(sub.getFormat()),
+                    DownloadService.Spec.subtitle(sub.getLanguageTag(),
+                            "Subtitles " + sub.getLanguageTag()),
+                    sub.getContent(), null,
+                    sub.getLanguageTag() + "." + Streams.suffix(sub.getFormat(), "ttml"),
+                    sub.getFormat() == null ? "text/plain" : sub.getFormat().getMimeType()));
         }
 
         if (options.isEmpty()) {
@@ -785,7 +823,7 @@ public class MainActivity extends Activity {
         String audioUrl = option.audioUrl;
         DownloadService.Spec spec = option.spec;
 
-        if (option.spec.kind == DownloadService.Kind.MERGE) {
+        if (option.spec.kind == DownloadService.Kind.MERGE) {  // NOSONAR — readability
             // Read the spinner here rather than at fetch time, so changing the track
             // actually changes what gets queued.
             final int selected = audioSpinner.getSelectedItemPosition();
@@ -796,8 +834,8 @@ public class MainActivity extends Activity {
             final AudioStream track = audioTracks.get(selected);
             audioUrl = track.getContent();
             // Carry the id so a re-resolve after expiry lands on the same track.
-            spec = new DownloadService.Spec(DownloadService.Kind.MERGE, option.spec.height,
-                    track.getAudioTrackId(), option.spec.label);
+            spec = DownloadService.Spec.merge(option.spec.height, track.getAudioTrackId(),
+                    option.spec.label);
         }
 
         final DownloadService.Task task =

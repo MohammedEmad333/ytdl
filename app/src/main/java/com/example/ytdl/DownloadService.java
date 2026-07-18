@@ -20,16 +20,24 @@ import android.os.IBinder;
 import android.os.SystemClock;
 import android.provider.MediaStore;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.schabi.newpipe.extractor.ServiceList;
 import org.schabi.newpipe.extractor.stream.AudioStream;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
+import org.schabi.newpipe.extractor.stream.SubtitlesStream;
 import org.schabi.newpipe.extractor.stream.VideoStream;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -57,9 +65,10 @@ public class DownloadService extends Service {
 
     /** What kind of file was asked for. */
     public enum Kind {
-        MERGE,   // video-only stream + a chosen audio track, muxed together
-        MUXED,   // a progressive stream that already has audio
-        AUDIO    // audio track on its own
+        MERGE,    // video-only stream + a chosen audio track, muxed together
+        MUXED,    // a progressive stream that already has audio
+        AUDIO,    // audio track on its own
+        SUBTITLE  // caption file on its own
     }
 
     /**
@@ -76,14 +85,53 @@ public class DownloadService extends Service {
         public final int height;
         /** Explicitly chosen track, or null for whatever ranks best on the day. */
         public final String audioTrackId;
+        /** Language tag for SUBTITLE. */
+        public final String subtitleTag;
         public final String label;
 
-        public Spec(final Kind kind, final int height, final String audioTrackId,
-                    final String label) {
+        private Spec(final Kind kind, final int height, final String audioTrackId,
+                     final String subtitleTag, final String label) {
             this.kind = kind;
             this.height = height;
             this.audioTrackId = audioTrackId;
+            this.subtitleTag = subtitleTag;
             this.label = label;
+        }
+
+        // Factories rather than one wide constructor: most fields are meaningless for most
+        // kinds, and a call site passing three nulls says nothing about which kind it is.
+        public static Spec merge(final int height, final String audioTrackId,
+                                 final String label) {
+            return new Spec(Kind.MERGE, height, audioTrackId, null, label);
+        }
+
+        public static Spec muxed(final int height, final String label) {
+            return new Spec(Kind.MUXED, height, null, null, label);
+        }
+
+        public static Spec audio(final String audioTrackId, final String label) {
+            return new Spec(Kind.AUDIO, 0, audioTrackId, null, label);
+        }
+
+        public static Spec subtitle(final String tag, final String label) {
+            return new Spec(Kind.SUBTITLE, 0, null, tag, label);
+        }
+
+        JSONObject toJson() throws JSONException {
+            final JSONObject o = new JSONObject();
+            o.put("kind", kind.name());
+            o.put("height", height);
+            o.putOpt("audioTrackId", audioTrackId);
+            o.putOpt("subtitleTag", subtitleTag);
+            o.put("label", label);
+            return o;
+        }
+
+        static Spec fromJson(final JSONObject o) throws JSONException {
+            return new Spec(Kind.valueOf(o.getString("kind")), o.getInt("height"),
+                    o.isNull("audioTrackId") ? null : o.getString("audioTrackId"),
+                    o.isNull("subtitleTag") ? null : o.getString("subtitleTag"),
+                    o.getString("label"));
         }
     }
 
@@ -123,7 +171,7 @@ public class DownloadService extends Service {
 
     /** A queued download. Mutable fields are volatile: the worker writes, the UI polls. */
     public static final class Task {
-        public final long id = NEXT_ID.getAndIncrement();
+        public final long id;
         /** The durable identity. Everything else can be re-derived from this. */
         public final String pageUrl;
         public final Spec spec;
@@ -156,9 +204,57 @@ public class DownloadService extends Service {
         long rateBytes;
 
         public Task(final String pageUrl, final String title, final Spec spec) {
+            this(NEXT_ID.getAndIncrement(), pageUrl, title, spec);
+        }
+
+        private Task(final long id, final String pageUrl, final String title, final Spec spec) {
+            this.id = id;
             this.pageUrl = pageUrl;
             this.title = title;
             this.spec = spec;
+        }
+
+        JSONObject toJson() throws JSONException {
+            final JSONObject o = new JSONObject();
+            o.put("id", id);
+            o.put("pageUrl", pageUrl);
+            o.put("title", title);
+            o.put("spec", spec.toJson());
+            // Kept even though they may be stale: if they still work, a restored task saves
+            // a request; if they don't, the 403 path re-derives them anyway.
+            o.putOpt("videoUrl", videoUrl);
+            o.putOpt("audioUrl", audioUrl);
+            o.put("extension", extension);
+            o.put("mimeType", mimeType);
+            o.put("expectedVideoBytes", expectedVideoBytes);
+            o.put("expectedAudioBytes", expectedAudioBytes);
+            o.put("state", state.name());
+            o.put("done", done);
+            o.put("total", total);
+            o.putOpt("error", error);
+            return o;
+        }
+
+        static Task fromJson(final JSONObject o) throws JSONException {
+            final Task t = new Task(o.getLong("id"), o.getString("pageUrl"),
+                    o.getString("title"), Spec.fromJson(o.getJSONObject("spec")));
+            t.videoUrl = o.isNull("videoUrl") ? null : o.getString("videoUrl");
+            t.audioUrl = o.isNull("audioUrl") ? null : o.getString("audioUrl");
+            t.extension = o.optString("extension", "mp4");
+            t.mimeType = o.optString("mimeType", "video/mp4");
+            t.expectedVideoBytes = o.optLong("expectedVideoBytes", -1);
+            t.expectedAudioBytes = o.optLong("expectedAudioBytes", -1);
+            t.done = o.optLong("done", 0);
+            t.total = o.optLong("total", -1);
+            t.error = o.isNull("error") ? null : o.getString("error");
+
+            final State saved = State.valueOf(o.getString("state"));
+            // A task that was mid-transfer when the process died has a valid partial on
+            // disk — the file is append-only and is only deleted on cancel or failure. That
+            // is exactly the pause invariant, so a killed transfer and a paused one are the
+            // same situation and restore identically. Crash recovery comes free.
+            t.state = saved.active() ? State.PAUSED : saved;
+            return t;
         }
 
         /** Pre-resolved by the activity, which already extracted to show you the list. */
@@ -190,6 +286,80 @@ public class DownloadService extends Service {
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
 
+    // ---------------------------------------------------------------- persistence
+
+    private static final String QUEUE_FILE = "queue.json";
+    private static final Object IO_LOCK = new Object();
+    private static boolean loaded;
+
+    /**
+     * Reads the queue back from disk. Called from both the activity and the service, since
+     * either can be the first thing alive in a fresh process.
+     *
+     * Without this, expiry-proof resume was a claim rather than a feature: the queue lived
+     * in a static list, so swiping the app away or letting Android reclaim the process took
+     * every paused task with it and left its partial files orphaned in cache forever. Pausing
+     * overnight is precisely the case where the process won't survive.
+     */
+    public static synchronized void ensureLoaded(final Context context) {
+        if (loaded) {
+            return;
+        }
+        loaded = true;
+
+        synchronized (IO_LOCK) {
+            final File file = new File(context.getFilesDir(), QUEUE_FILE);
+            if (!file.exists()) {
+                return;
+            }
+            try {
+                final byte[] bytes = new byte[(int) file.length()];
+                try (InputStream in = new FileInputStream(file)) {
+                    int read = 0;
+                    while (read < bytes.length) {
+                        final int n = in.read(bytes, read, bytes.length - read);
+                        if (n < 0) {
+                            break;
+                        }
+                        read += n;
+                    }
+                }
+
+                final JSONArray array = new JSONArray(new String(bytes, StandardCharsets.UTF_8));
+                long highest = 0;
+                for (int i = 0; i < array.length(); i++) {
+                    final Task task = Task.fromJson(array.getJSONObject(i));
+                    TASKS.add(task);
+                    highest = Math.max(highest, task.id);
+                }
+                // Ids are the temp-file names, so a restored task colliding with a new one
+                // would have them fighting over the same partials.
+                NEXT_ID.set(highest + 1);
+            } catch (final Exception e) {
+                // A corrupt queue file shouldn't brick the app. Losing it costs the queue.
+                TASKS.clear();
+            }
+        }
+    }
+
+    static void save(final Context context) {
+        synchronized (IO_LOCK) {
+            try {
+                final JSONArray array = new JSONArray();
+                for (final Task task : snapshot()) {
+                    array.put(task.toJson());
+                }
+                final File file = new File(context.getFilesDir(), QUEUE_FILE);
+                try (Writer writer = new OutputStreamWriter(
+                        new FileOutputStream(file), StandardCharsets.UTF_8)) {
+                    writer.write(array.toString());
+                }
+            } catch (final Exception ignored) {
+                // Best-effort. A failed write costs the queue on next launch, not this run.
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- api
 
     /** Copy for the UI to read without holding the lock while it draws. */
@@ -210,20 +380,43 @@ public class DownloadService extends Service {
 
     public static void enqueue(final Context context, final Task task) {
         TASKS.add(task);
+        save(context);
         wake(context, null, 0);
     }
 
-    public static void pause(final Task task) {
+    public static void pause(final Context context, final Task task) {
         task.pauseRequested = true;
         // A queued task has no worker inside it to notice the flag, so move it directly.
         if (task.state == State.QUEUED) {
             task.state = State.PAUSED;
         }
+        save(context);
     }
 
     public static void resume(final Context context, final Task task) {
         task.pauseRequested = false;
         task.state = State.QUEUED;
+        save(context);
+        wake(context, null, 0);
+    }
+
+    /**
+     * A failed task already knows its page URL and what was asked for, so retrying is just
+     * putting it back in the queue. The cached URLs go, though — whatever failed may well
+     * have been a stale one, and re-deriving is the point of keeping the spec.
+     */
+    public static void retry(final Context context, final Task task) {
+        task.error = null;
+        task.cancelled = false;
+        task.pauseRequested = false;
+        task.videoUrl = null;
+        task.audioUrl = null;
+        task.expectedVideoBytes = -1;
+        task.expectedAudioBytes = -1;
+        task.done = 0;
+        task.total = -1;
+        task.state = State.QUEUED;
+        save(context);
         wake(context, null, 0);
     }
 
@@ -240,6 +433,7 @@ public class DownloadService extends Service {
             task.state = State.CANCELLED;
         }
         // If it is active, the worker's next checkpoint throws and cleans up there.
+        save(context);
     }
 
     public static void clearFinished() {
@@ -253,6 +447,11 @@ public class DownloadService extends Service {
             TASKS.clear();
             TASKS.addAll(keep);
         }
+    }
+
+    public static void clearFinished(final Context context) {
+        clearFinished();
+        save(context);
     }
 
     private static void wake(final Context context, final String action, final long taskId) {
@@ -269,6 +468,7 @@ public class DownloadService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        ensureLoaded(this);
         final NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID, "Downloads", NotificationManager.IMPORTANCE_LOW);
         channel.setShowBadge(false);
@@ -285,7 +485,7 @@ public class DownloadService extends Service {
             final Task task = byId(intent.getLongExtra(EXTRA_TASK_ID, -1));
             if (task != null) {
                 if (ACTION_PAUSE.equals(intent.getStringExtra(EXTRA_ACTION))) {
-                    pause(task);
+                    pause(this, task);
                 } else {
                     task.pauseRequested = false;
                     task.state = State.QUEUED;
@@ -417,6 +617,7 @@ public class DownloadService extends Service {
                 deleteTemps(this, task);
             }
             update(task);
+            save(this);
         }
     }
 
@@ -437,6 +638,26 @@ public class DownloadService extends Service {
         task.title = Streams.sanitize(info.getName());
 
         switch (task.spec.kind) {
+            case SUBTITLE: {
+                SubtitlesStream chosen = null;
+                for (final SubtitlesStream sub : Streams.subtitles(info)) {
+                    if (sub.getLanguageTag() != null
+                            && sub.getLanguageTag().equals(task.spec.subtitleTag)) {
+                        chosen = sub;
+                        break;
+                    }
+                }
+                if (chosen == null) {
+                    throw new IOException("that subtitle track is gone");
+                }
+                // The language rides in the extension so the file lands as
+                // "Title.en.ttml" without publish() needing to know about subtitles.
+                task.preResolve(chosen.getContent(), null,
+                        chosen.getLanguageTag() + "." + Streams.suffix(chosen.getFormat(), "ttml"),
+                        chosen.getFormat() == null
+                                ? "text/plain" : chosen.getFormat().getMimeType());
+                break;
+            }
             case AUDIO: {
                 final AudioStream a = Streams.pickAudio(
                         Streams.allAudio(info), task.spec.audioTrackId);
@@ -521,6 +742,7 @@ public class DownloadService extends Service {
         task.rateAt = 0;
         task.rateBytes = 0;
         update(task);
+        save(this);
     }
 
     private static File videoTemp(final Context c, final Task t) {
