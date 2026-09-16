@@ -2,25 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
-
-    <!--
-        The queue survives leaving the app, which means a foreground service, which means
-        a notification. From Android 14 the type has to be declared here AND passed to
-        startForeground(), and they have to agree or the system refuses to start it.
-        dataSync is the right type for downloads.
-        POST_NOTIFICATIONS is runtime-requested from Android 13 up — without it the service
-        still works but its progress notification is silently invisible.
-    -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!--
-        Framework resources only — no strings.xml, no launcher icon PNGs, no styles.xml.
-        Icons are binary, and this repo deliberately has no binary files in it.
-        No storage permission: minSdk is 29, and MediaStore writes to the public Downloads
-        collection have been permission-free since Android 10.
-    -->
     <application
         android:name=".DownloaderApp"
         android:allowBackup="true"
@@ -39,10 +24,10 @@
             </intent-filter>
         </activity>
 
-        <!--
-            All shared text goes through the router. YouTube is forwarded unchanged; Spotify
-            tracks are matched to a YouTube source first and then use the existing downloader.
-        -->
+        <activity
+            android:name=".HistoryActivity"
+            android:exported="false" />
+
         <activity
             android:name=".LinkRouterActivity"
             android:exported="true"
@@ -53,25 +38,28 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
 
-            <!-- Allow opening a Spotify track URL directly with the app. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="https"
-                    android:host="open.spotify.com"
-                    android:pathPrefix="/track/" />
+                <data android:scheme="https" android:host="open.spotify.com" android:pathPrefix="/track/" />
+                <data android:scheme="https" android:host="open.spotify.com" android:pathPrefix="/album/" />
+                <data android:scheme="https" android:host="open.spotify.com" android:pathPrefix="/playlist/" />
             </intent-filter>
 
-            <!-- Spotify's shortened share links redirect to open.spotify.com/track/... -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="https"
-                    android:host="spotify.link" />
+                <data android:scheme="https" android:host="spotify.link" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="soundcloud.com" />
+                <data android:scheme="https" android:host="on.soundcloud.com" />
             </intent-filter>
         </activity>
 
@@ -80,6 +68,10 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-    </application>
+        <service
+            android:name=".Mp3ExportService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
+    </application>
 </manifest>
