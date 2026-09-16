@@ -18,13 +18,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # Installs cmdline-tools and accepts the SDK licences, so AGP can pull down
-      # platform 36 by itself.
+      # setup-android's old default includes the removed SDK package named "tools".
+      # Request only current packages explicitly so hosted-runner SDK changes don't break CI.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-36 build-tools;36.0.0
 
-      # This is the trick that makes a laptop unnecessary: setup-gradle installs Gradle
-      # and puts it on PATH, so there's no ./gradlew and no gradle-wrapper.jar. That jar
-      # is binary, and you can't paste a binary into GitHub's web editor from a phone.
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
