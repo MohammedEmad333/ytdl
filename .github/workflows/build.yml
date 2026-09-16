@@ -1,7 +1,5 @@
 name: Build APK
 
-# No branch filter — GitHub's web editor commits straight to the default branch,
-# whatever it happens to be called.
 on:
   push:
   workflow_dispatch:
@@ -12,17 +10,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # AGP 8.13 needs JDK 17.
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      # setup-android's old default includes the removed SDK package named "tools".
-      # Request only current packages explicitly so hosted-runner SDK changes don't break CI.
+      # setup-android historically defaulted to the removed SDK package named `tools`.
+      # Ask it only to expose sdkmanager, then install current packages explicitly.
       - uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools platforms;android-36 build-tools;36.0.0
+          packages: ''
+
+      - name: Install Android 36 SDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
         with:
