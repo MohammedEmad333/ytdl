@@ -24,14 +24,10 @@
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="YT Downloader"
+        android:label="Media Downloader"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
-        <!--
-            singleTop matters for the share filter: without it, every share stacks another
-            copy of the activity instead of arriving at onNewIntent.
-        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -40,12 +36,41 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+        </activity>
 
-            <!-- Share from YouTube straight into here, rather than copy/switch/paste. -->
+        <!--
+            All shared text goes through the router. YouTube is forwarded unchanged; Spotify
+            tracks are matched to a YouTube source first and then use the existing downloader.
+        -->
+        <activity
+            android:name=".LinkRouterActivity"
+            android:exported="true"
+            android:noHistory="true">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
+            </intent-filter>
+
+            <!-- Allow opening a Spotify track URL directly with the app. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="open.spotify.com"
+                    android:pathPrefix="/track/" />
+            </intent-filter>
+
+            <!-- Spotify's shortened share links redirect to open.spotify.com/track/... -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="spotify.link" />
             </intent-filter>
         </activity>
 
