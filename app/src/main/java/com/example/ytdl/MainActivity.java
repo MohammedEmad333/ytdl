@@ -110,6 +110,7 @@ public class MainActivity extends Activity {
         Net.ensureExtractor();
         DownloadService.ensureLoaded(this);
         setContentView(buildUi());
+        trimThumbnailCache();
         selectTab(true);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
@@ -619,6 +620,10 @@ public class MainActivity extends Activity {
                     urlInput.setText(query);
                     fetch(query);
                 })
+                .setNeutralButton("Clear", (d, which) -> {
+                    getPreferences(MODE_PRIVATE).edit().remove(RECENTS).apply();
+                    Toast.makeText(this, "Recent searches cleared", Toast.LENGTH_SHORT).show();
+                })
                 .setNegativeButton("Close", null)
                 .show();
     }
@@ -820,6 +825,20 @@ public class MainActivity extends Activity {
                     });
                 }
             } catch (final Exception ignored) {}
+        });
+    }
+
+    private void trimThumbnailCache() {
+        executor.execute(() -> {
+            final File[] files = getCacheDir().listFiles(
+                    file -> file.getName().startsWith("thumb-"));
+            if (files == null || files.length == 0) return;
+            java.util.Arrays.sort(files,
+                    (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+            final long cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000;
+            for (int i = 0; i < files.length; i++) {
+                if (i >= 100 || files[i].lastModified() < cutoff) files[i].delete();
+            }
         });
     }
 
