@@ -436,6 +436,29 @@ public class DownloadService extends Service {
         return a == null ? b == null : a.equals(b);
     }
 
+    public static boolean moveUp(final Context context, final Task task) {
+        return move(context, task, -1);
+    }
+
+    public static boolean moveDown(final Context context, final Task task) {
+        return move(context, task, 1);
+    }
+
+    private static boolean move(final Context context, final Task task, final int delta) {
+        if (task == null || task.state.active() || task.state.finished()) return false;
+        synchronized (TASKS) {
+            final int from = TASKS.indexOf(task);
+            if (from < 0) return false;
+            final int to = from + delta;
+            if (to < 0 || to >= TASKS.size()) return false;
+            final Task other = TASKS.get(to);
+            if (other.state.active()) return false;
+            Collections.swap(TASKS, from, to);
+        }
+        save(context);
+        return true;
+    }
+
     public static void pause(final Context context, final Task task) {
         task.pauseRequested = true;
         // A queued task has no worker inside it to notice the flag, so move it directly.
