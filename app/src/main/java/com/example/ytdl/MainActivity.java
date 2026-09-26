@@ -64,6 +64,7 @@ public class MainActivity extends Activity {
     private final List<Option> options = new ArrayList<>();
     private final List<AudioStream> audioTracks = new ArrayList<>();
     private final List<Entry> playlist = new ArrayList<>();
+    private final List<Entry> collectionAll = new ArrayList<>();
     private List<DownloadService.Task> queueSnapshot = new ArrayList<>();
 
     private EditText urlInput;
@@ -83,6 +84,8 @@ public class MainActivity extends Activity {
     private String videoTitle = "media";
     private String currentArtist = "";
     private String currentCover = "";
+    private String collectionName = "";
+    private boolean collectionAudioOnly;
 
     @Override
     protected void onCreate(final Bundle savedInstanceState) {
@@ -455,6 +458,9 @@ public class MainActivity extends Activity {
         currentCover = "";
         options.clear();
         playlist.clear();
+        collectionAll.clear();
+        collectionName = "";
+        collectionAudioOnly = false;
         audioTracks.clear();
         audioAdapter.clear();
         audioSpinner.setVisibility(View.GONE);
@@ -516,34 +522,97 @@ public class MainActivity extends Activity {
         formatAdapter.notifyDataSetChanged();
     }
 
-    private void showCollection(final String name, final List<Entry> entries, final boolean audioOnly) {
-        options.clear();
+    private void showCollection(final String name, final List<Entry> entries,
+                                final boolean audioOnly) {
+        collectionAll.clear();
+        collectionAll.addAll(entries);
         playlist.clear();
         playlist.addAll(entries);
-        if (entries.isEmpty()) {
+        collectionName = name;
+        collectionAudioOnly = audioOnly;
+        renderCollectionOptions();
+    }
+
+    private void renderCollectionOptions() {
+        options.clear();
+        if (collectionAll.isEmpty()) {
             status.setText("That collection came back empty.");
             formatAdapter.notifyDataSetChanged();
             return;
         }
-        status.setText(name + "\n" + entries.size() + (audioOnly ? " tracks" : " videos")
-                + "\nPick a format to queue the whole collection.");
-        if (!audioOnly) {
+
+        final int selected = playlist.size();
+        status.setText(collectionName + "\n" + collectionAll.size()
+                + (collectionAudioOnly ? " tracks" : " videos")
+                + "\n" + selected + " selected · choose items or pick a format.");
+
+        options.add(Option.chooseCollection("Choose items",
+                selected + " of " + collectionAll.size() + " selected"));
+
+        if (selected > 0 && !collectionAudioOnly) {
             for (final int height : new int[]{2160, 1080, 720, 480, 360}) {
-                options.add(new Option(height + "p", "merge with audio · queue " + entries.size(),
+                options.add(new Option(height + "p", "merge with audio · queue " + selected,
                         DownloadService.Spec.merge(height, null, height + "p"), null, null,
                         "mp4", "video/mp4", null, false));
             }
         }
-        options.add(new Option("Audio", "best available · queue " + entries.size(),
-                DownloadService.Spec.audio(null, "Audio"), null, null,
-                "m4a", "audio/mp4", null, false));
-        for (final int bitrate : new int[]{320, 192, 128}) {
-            options.add(new Option("MP3 " + bitrate,
-                    "encode MP3 · queue " + entries.size()
-                            + (audioOnly ? " · preserve Spotify metadata" : ""),
-                    null, null, null, "mp3", "audio/mpeg", null, true, bitrate));
+        if (selected > 0) {
+            options.add(new Option("Audio", "best available · queue " + selected,
+                    DownloadService.Spec.audio(null, "Audio"), null, null,
+                    "m4a", "audio/mp4", null, false));
+            for (final int bitrate : new int[]{320, 192, 128}) {
+                options.add(new Option("MP3 " + bitrate,
+                        "encode MP3 · queue " + selected
+                                + (collectionAudioOnly ? " · preserve Spotify metadata" : ""),
+                        null, null, null, "mp3", "audio/mpeg", null, true, bitrate));
+            }
         }
         formatAdapter.notifyDataSetChanged();
+    }
+
+    private void showCollectionPicker() {
+        if (collectionAll.isEmpty()) return;
+        final String[] labels = new String[collectionAll.size()];
+        final boolean[] checked = new boolean[collectionAll.size()];
+        for (int i = 0; i < collectionAll.size(); i++) {
+            final Entry entry = collectionAll.get(i);
+            labels[i] = entry.title;
+            checked[i] = playlist.contains(entry);
+        }
+
+        final android.app.AlertDialog dialog = new android.app.AlertDialog.Builder(this)
+                .setTitle("Choose items")
+                .setMultiChoiceItems(labels, checked, (d, which, isChecked) -> checked[which] = isChecked)
+                .setPositiveButton("Apply", (d, which) -> {
+                    playlist.clear();
+                    for (int i = 0; i < collectionAll.size(); i++) {
+                        if (checked[i]) playlist.add(collectionAll.get(i));
+                    }
+                    renderCollectionOptions();
+                })
+                .setNegativeButton("Cancel", null)
+                .setNeutralButton("Select all", null)
+                .create();
+
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+                final android.widget.ListView list = dialog.getListView();
+                boolean anyUnchecked = false;
+                for (final boolean value : checked) {
+                    if (!value) {
+                        anyUnchecked = true;
+                        break;
+                    }
+                }
+                for (int i = 0; i < checked.length; i++) {
+                    checked[i] = anyUnchecked;
+                    list.setItemChecked(i, anyUnchecked);
+                }
+                dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL)
+                        .setText(anyUnchecked ? "Clear all" : "Select all");
+            });
+        });
+        dialog.show();
     }
 
     private void showMedia(final StreamInfo info, final String source) {
@@ -671,6 +740,10 @@ public class MainActivity extends Activity {
     }
 
     private void activate(final Option option) {
+        if (option.selectCollection) {
+            showCollectionPicker();
+            return;
+        }
         if (option.navigateUrl != null) {
             urlInput.setText(option.navigateUrl);
             fetch(option.navigateUrl);
@@ -1014,12 +1087,13 @@ public class MainActivity extends Activity {
         final boolean mp3;
         final int mp3Kbps;
         final String thumbnailUrl;
+        final boolean selectCollection;
 
         Option(final String primary, final String detail, final DownloadService.Spec spec,
                final String videoUrl, final String audioUrl, final String extension,
                final String mimeType, final String navigateUrl, final boolean mp3) {
             this(primary, detail, spec, videoUrl, audioUrl, extension, mimeType,
-                    navigateUrl, mp3, mp3 ? 192 : 0, "");
+                    navigateUrl, mp3, mp3 ? 192 : 0, "", false);
         }
 
         Option(final String primary, final String detail, final DownloadService.Spec spec,
@@ -1027,13 +1101,13 @@ public class MainActivity extends Activity {
                final String mimeType, final String navigateUrl, final boolean mp3,
                final int mp3Kbps) {
             this(primary, detail, spec, videoUrl, audioUrl, extension, mimeType,
-                    navigateUrl, mp3, mp3Kbps, "");
+                    navigateUrl, mp3, mp3Kbps, "", false);
         }
 
         Option(final String primary, final String detail, final DownloadService.Spec spec,
                final String videoUrl, final String audioUrl, final String extension,
                final String mimeType, final String navigateUrl, final boolean mp3,
-               final int mp3Kbps, final String thumbnailUrl) {
+               final int mp3Kbps, final String thumbnailUrl, final boolean selectCollection) {
             this.primary = primary;
             this.detail = detail;
             this.spec = spec;
@@ -1045,12 +1119,18 @@ public class MainActivity extends Activity {
             this.mp3 = mp3;
             this.mp3Kbps = mp3Kbps;
             this.thumbnailUrl = thumbnailUrl == null ? "" : thumbnailUrl;
+            this.selectCollection = selectCollection;
         }
 
         static Option navigate(final String title, final String detail, final String url,
                                final String thumbnailUrl) {
             return new Option(title, detail, null, null, null, "", "", url,
-                    false, 0, thumbnailUrl);
+                    false, 0, thumbnailUrl, false);
+        }
+
+        static Option chooseCollection(final String title, final String detail) {
+            return new Option(title, detail, null, null, null, "", "", null,
+                    false, 0, "", true);
         }
     }
 }
