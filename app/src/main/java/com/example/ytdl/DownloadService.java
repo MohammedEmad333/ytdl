@@ -827,6 +827,11 @@ public class DownloadService extends Service {
                     .append(" / ").append(Ui.bytes(task.total));
             if (task.bytesPerSecond > 0) {
                 text.append(" · ").append(Ui.bytes(task.bytesPerSecond)).append("/s");
+                if (task.done < task.total) {
+                    final long eta = (task.total - task.done + task.bytesPerSecond - 1)
+                            / task.bytesPerSecond;
+                    text.append(" · ETA ").append(formatEta(eta));
+                }
             }
         }
         if (waiting > 0) {
@@ -835,6 +840,14 @@ public class DownloadService extends Service {
 
         getSystemService(NotificationManager.class).notify(NOTIFICATION_ID,
                 buildNotification(task.title, text.toString(), task.percent(), true, task));
+    }
+
+    private static String formatEta(final long seconds) {
+        final long h = seconds / 3600;
+        final long m = (seconds % 3600) / 60;
+        final long s = seconds % 60;
+        return h > 0 ? String.format(java.util.Locale.US, "%d:%02d:%02d", h, m, s)
+                : String.format(java.util.Locale.US, "%d:%02d", m, s);
     }
 
     private Notification buildNotification(final String title, final String text,
