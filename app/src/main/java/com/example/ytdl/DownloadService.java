@@ -184,6 +184,7 @@ public class DownloadService extends Service {
         volatile String audioUrl;
         volatile String extension = "mp4";
         volatile String mimeType = "video/mp4";
+        public volatile String outputUri;
 
         /**
          * Byte lengths from the first successful attempt, so a re-derived URL that serves
@@ -226,6 +227,7 @@ public class DownloadService extends Service {
             o.putOpt("audioUrl", audioUrl);
             o.put("extension", extension);
             o.put("mimeType", mimeType);
+            o.putOpt("outputUri", outputUri);
             o.put("expectedVideoBytes", expectedVideoBytes);
             o.put("expectedAudioBytes", expectedAudioBytes);
             o.put("state", state.name());
@@ -242,6 +244,7 @@ public class DownloadService extends Service {
             t.audioUrl = o.isNull("audioUrl") ? null : o.getString("audioUrl");
             t.extension = o.optString("extension", "mp4");
             t.mimeType = o.optString("mimeType", "video/mp4");
+            t.outputUri = o.isNull("outputUri") ? null : o.optString("outputUri", null);
             t.expectedVideoBytes = o.optLong("expectedVideoBytes", -1);
             t.expectedAudioBytes = o.optLong("expectedAudioBytes", -1);
             t.done = o.optLong("done", 0);
@@ -378,10 +381,30 @@ public class DownloadService extends Service {
         return null;
     }
 
-    public static void enqueue(final Context context, final Task task) {
-        TASKS.add(task);
+    public static boolean enqueue(final Context context, final Task task) {
+        synchronized (TASKS) {
+            for (final Task existing : TASKS) {
+                if (!existing.state.finished() && sameRequest(existing, task)) {
+                    return false;
+                }
+            }
+            TASKS.add(task);
+        }
         save(context);
         wake(context, null, 0);
+        return true;
+    }
+
+    private static boolean sameRequest(final Task a, final Task b) {
+        return eq(a.pageUrl, b.pageUrl)
+                && a.spec.kind == b.spec.kind
+                && a.spec.height == b.spec.height
+                && eq(a.spec.audioTrackId, b.spec.audioTrackId)
+                && eq(a.spec.subtitleTag, b.spec.subtitleTag);
+    }
+
+    private static boolean eq(final String a, final String b) {
+        return a == null ? b == null : a.equals(b);
     }
 
     public static void pause(final Context context, final Task task) {
@@ -725,12 +748,12 @@ public class DownloadService extends Service {
 
             task.state = State.SAVING;
             update(task);
-            publish(merged, task.title + ".mp4", "video/mp4");
+            task.outputUri = publish(merged, task.title + ".mp4", "video/mp4").toString();
         } else {
             control.checkpoint();
             task.state = State.SAVING;
             update(task);
-            publish(video, task.title + "." + task.extension, task.mimeType);
+            task.outputUri = publish(video, task.title + "." + task.extension, task.mimeType).toString();
         }
     }
 
@@ -804,6 +827,11 @@ public class DownloadService extends Service {
                     .append(" / ").append(Ui.bytes(task.total));
             if (task.bytesPerSecond > 0) {
                 text.append(" · ").append(Ui.bytes(task.bytesPerSecond)).append("/s");
+                if (task.done < task.total) {
+                    final long eta = (task.total - task.done + task.bytesPerSecond - 1)
+                            / task.bytesPerSecond;
+                    text.append(" · ETA ").append(formatEta(eta));
+                }
             }
         }
         if (waiting > 0) {
@@ -812,6 +840,14 @@ public class DownloadService extends Service {
 
         getSystemService(NotificationManager.class).notify(NOTIFICATION_ID,
                 buildNotification(task.title, text.toString(), task.percent(), true, task));
+    }
+
+    private static String formatEta(final long seconds) {
+        final long h = seconds / 3600;
+        final long m = (seconds % 3600) / 60;
+        final long s = seconds % 60;
+        return h > 0 ? String.format(java.util.Locale.US, "%d:%02d:%02d", h, m, s)
+                : String.format(java.util.Locale.US, "%d:%02d", m, s);
     }
 
     private Notification buildNotification(final String title, final String text,
@@ -998,7 +1034,7 @@ public class DownloadService extends Service {
     // ---------------------------------------------------------------- saving
 
     /** IS_PENDING hides the file from the gallery until the copy is actually complete. */
-    private void publish(final File source, final String displayName, final String mimeType)
+    private Uri publish(final File source, final String displayName, final String mimeType)
             throws IOException {
 
         final ContentResolver resolver = getContentResolver();
@@ -1027,5 +1063,6 @@ public class DownloadService extends Service {
         values.clear();
         values.put(MediaStore.Downloads.IS_PENDING, 0);
         resolver.update(uri, values, null, null);
+        return uri;
     }
 }

@@ -621,10 +621,17 @@ public class MainActivity extends Activity {
 
     private void enqueue(final Option option) {
         if (!playlist.isEmpty()) {
+            int added = 0;
             for (final Entry entry : playlist) {
-                DownloadService.enqueue(this, new DownloadService.Task(entry.url, entry.title, option.spec));
+                if (DownloadService.enqueue(this,
+                        new DownloadService.Task(entry.url, entry.title, option.spec))) {
+                    added++;
+                }
             }
-            Toast.makeText(this, "Queued " + playlist.size(), Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, added == 0 ? "All items are already in queue"
+                    : "Queued " + added + (added < playlist.size()
+                    ? " · skipped " + (playlist.size() - added) + " duplicates" : ""),
+                    Toast.LENGTH_SHORT).show();
             refreshQueue();
             selectTab(false);
             return;
@@ -643,8 +650,9 @@ public class MainActivity extends Activity {
         }
         final DownloadService.Task task = new DownloadService.Task(pageUrl, videoTitle, spec);
         task.preResolve(option.videoUrl, audioUrl, option.extension, option.mimeType);
-        DownloadService.enqueue(this, task);
-        Toast.makeText(this, "Queued", Toast.LENGTH_SHORT).show();
+        final boolean added = DownloadService.enqueue(this, task);
+        Toast.makeText(this, added ? "Queued" : "Already in queue",
+                Toast.LENGTH_SHORT).show();
         refreshQueue();
         selectTab(false);
     }
@@ -704,6 +712,9 @@ public class MainActivity extends Activity {
             card.addView(progressRule(task));
             if (!task.state.finished()) card.addView(controls(task));
             else if (task.state == DownloadService.State.FAILED) card.addView(retryControls(task));
+            else if (task.state == DownloadService.State.DONE && task.outputUri != null) {
+                card.addView(doneControls(task));
+            }
             final LinearLayout wrap = new LinearLayout(MainActivity.this);
             wrap.setPadding(0, 0, 0, Ui.dp(MainActivity.this, 8));
             wrap.addView(card, new LinearLayout.LayoutParams(
@@ -750,6 +761,40 @@ public class MainActivity extends Activity {
         return row;
     }
 
+    private View doneControls(final DownloadService.Task task) {
+        final LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, Ui.dp(this, 10), 0, 0);
+        row.addView(smallButton(this, "Open", Ui.OK, v -> openSaved(task)));
+        row.addView(smallButton(this, "Share", Ui.ACCENT, v -> shareSaved(task)));
+        return row;
+    }
+
+    private void openSaved(final DownloadService.Task task) {
+        try {
+            final android.net.Uri uri = android.net.Uri.parse(task.outputUri);
+            final Intent intent = new Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, task.mimeType)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(intent);
+        } catch (final Exception e) {
+            Toast.makeText(this, "No app can open this file", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void shareSaved(final DownloadService.Task task) {
+        try {
+            final android.net.Uri uri = android.net.Uri.parse(task.outputUri);
+            final Intent intent = new Intent(Intent.ACTION_SEND)
+                    .setType(task.mimeType)
+                    .putExtra(Intent.EXTRA_STREAM, uri)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(intent, "Share file"));
+        } catch (final Exception e) {
+            Toast.makeText(this, "Couldn't share this file", Toast.LENGTH_SHORT).show();
+        }
+    }
+
     private View smallButton(final Context c, final String text, final int color,
                              final View.OnClickListener click) {
         final TextView b = Ui.mono(c, 11, color);
@@ -774,6 +819,13 @@ public class MainActivity extends Activity {
 
     private void refreshQueue() {
         queueSnapshot = DownloadService.snapshot();
+        int remaining = 0;
+        for (final DownloadService.Task task : queueSnapshot) {
+            if (!task.state.finished()) remaining++;
+        }
+        if (queueTabLabel != null) {
+            queueTabLabel.setText(remaining > 0 ? "DOWNLOADS (" + remaining + ")" : "DOWNLOADS");
+        }
         if (queueAdapter != null) queueAdapter.notifyDataSetChanged();
     }
 
@@ -782,7 +834,14 @@ public class MainActivity extends Activity {
                 .append(task.state.label.toUpperCase(Locale.US));
         if (task.state.transferring() && task.total > 0) {
             s.append("  ").append(Ui.bytes(task.done)).append(" / ").append(Ui.bytes(task.total));
-            if (task.bytesPerSecond > 0) s.append("  ").append(Ui.bytes(task.bytesPerSecond)).append("/s");
+            if (task.bytesPerSecond > 0) {
+                s.append("  ").append(Ui.bytes(task.bytesPerSecond)).append("/s");
+                if (task.done < task.total) {
+                    final long eta = (task.total - task.done + task.bytesPerSecond - 1)
+                            / task.bytesPerSecond;
+                    s.append("  ETA ").append(formatDuration(eta));
+                }
+            }
         }
         if (task.error != null) s.append("  ").append(task.error);
         return s.toString();
