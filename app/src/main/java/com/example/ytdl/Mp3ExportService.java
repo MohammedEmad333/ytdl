@@ -35,18 +35,37 @@ public final class Mp3ExportService extends Service {
     private static final String CHANNEL = "mp3_exports";
     private static final int NOTIFICATION = 22;
     private static final String URL = "url";
+    private static final String PAGE_URL = "page_url";
     private static final String TITLE = "title";
     private static final String ARTIST = "artist";
     private static final String COVER = "cover";
+    private static final String BITRATE = "bitrate";
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
 
     public static void enqueue(final Context context, final String url, final String title,
                                final String artist, final String coverUrl) {
+        enqueue(context, url, title, artist, coverUrl, 192);
+    }
+
+    public static void enqueue(final Context context, final String url, final String title,
+                               final String artist, final String coverUrl, final int bitrateKbps) {
         final Intent intent = new Intent(context, Mp3ExportService.class)
                 .putExtra(URL, url)
                 .putExtra(TITLE, title)
                 .putExtra(ARTIST, artist)
-                .putExtra(COVER, coverUrl);
+                .putExtra(COVER, coverUrl)
+                .putExtra(BITRATE, normalizeBitrate(bitrateKbps));
+        context.startForegroundService(intent);
+    }
+
+    public static void enqueuePage(final Context context, final String pageUrl, final String title,
+                                   final String artist, final String coverUrl, final int bitrateKbps) {
+        final Intent intent = new Intent(context, Mp3ExportService.class)
+                .putExtra(PAGE_URL, pageUrl)
+                .putExtra(TITLE, title)
+                .putExtra(ARTIST, artist)
+                .putExtra(COVER, coverUrl)
+                .putExtra(BITRATE, normalizeBitrate(bitrateKbps));
         context.startForegroundService(intent);
     }
 
@@ -62,31 +81,60 @@ public final class Mp3ExportService extends Service {
     @Override
     public int onStartCommand(final Intent intent, final int flags, final int startId) {
         foreground("Preparing MP3…");
-        if (intent == null || intent.getStringExtra(URL) == null) {
+        if (intent == null) {
             stopSelf(startId);
             return START_NOT_STICKY;
         }
-        final String url = intent.getStringExtra(URL);
+        final String url = safe(intent.getStringExtra(URL));
+        final String pageUrl = safe(intent.getStringExtra(PAGE_URL));
+        if (url.isEmpty() && pageUrl.isEmpty()) {
+            stopSelf(startId);
+            return START_NOT_STICKY;
+        }
         final String title = Streams.sanitize(intent.getStringExtra(TITLE));
         final String artist = safe(intent.getStringExtra(ARTIST));
         final String cover = safe(intent.getStringExtra(COVER));
-        WORKER.execute(() -> runJob(startId, url, title, artist, cover));
+        final int bitrate = normalizeBitrate(intent.getIntExtra(BITRATE, 192));
+        WORKER.execute(() -> runJob(startId, url, pageUrl, title, artist, cover, bitrate));
         return START_NOT_STICKY;
     }
 
     @Override public IBinder onBind(final Intent intent) { return null; }
 
-    private void runJob(final int startId, final String url, final String title,
-                        final String artist, final String coverUrl) {
+    private void runJob(final int startId, final String directUrl, final String pageUrl,
+                        final String title, final String artist, final String coverUrl,
+                        final int bitrateKbps) {
         final File source = new File(getCacheDir(), "mp3-" + startId + ".source");
         final File cover = new File(getCacheDir(), "mp3-" + startId + ".jpg");
         final File output = new File(getCacheDir(), "mp3-" + startId + ".mp3");
         try {
-            update("Downloading audio…");
-            Net.fetchToFile(url, source, -1, (done, total) -> {}, () -> {});
-            final boolean hasCover = downloadCover(coverUrl, cover);
+            String audioUrl = directUrl;
+            String resolvedArtist = artist;
+            String resolvedCover = coverUrl;
+            if (audioUrl.isEmpty()) {
+                update("Resolving audio…");
+                Net.ensureExtractor();
+                final org.schabi.newpipe.extractor.stream.StreamInfo info =
+                        org.schabi.newpipe.extractor.stream.StreamInfo.getInfo(
+                                org.schabi.newpipe.extractor.ServiceList.YouTube, pageUrl);
+                final java.util.List<org.schabi.newpipe.extractor.stream.AudioStream> audio =
+                        Streams.allAudio(info);
+                if (audio.isEmpty()) throw new IOException("No downloadable audio stream found");
+                audioUrl = audio.get(0).getContent();
+                if (resolvedArtist.isEmpty() && info.getUploaderName() != null) {
+                    resolvedArtist = info.getUploaderName();
+                }
+                if (resolvedCover.isEmpty() && info.getThumbnails() != null
+                        && !info.getThumbnails().isEmpty()) {
+                    resolvedCover = info.getThumbnails().get(0).getUrl();
+                }
+            }
 
-            update("Encoding MP3…");
+            update("Downloading audio…");
+            Net.fetchToFile(audioUrl, source, -1, (done, total) -> {}, () -> {});
+            final boolean hasCover = downloadCover(resolvedCover, cover);
+
+            update("Encoding MP3 " + bitrateKbps + " kbps…");
             final StringBuilder command = new StringBuilder("-y -i ")
                     .append(q(source.getAbsolutePath())).append(' ');
             if (hasCover) {
@@ -96,9 +144,10 @@ public final class Mp3ExportService extends Service {
                 command.append("-map 0:a:0 ");
             }
             command.append("-vn ".replace("-vn ", hasCover ? "" : "-vn "))
-                    .append("-c:a libmp3lame -b:a 192k -id3v2_version 3 ")
+                    .append("-c:a libmp3lame -b:a ").append(bitrateKbps)
+                    .append("k -id3v2_version 3 ")
                     .append("-metadata title=").append(q(meta(title))).append(' ')
-                    .append("-metadata artist=").append(q(meta(artist))).append(' ')
+                    .append("-metadata artist=").append(q(meta(resolvedArtist))).append(' ')
                     .append(q(output.getAbsolutePath()));
 
             final FFmpegSession session = FFmpegKit.execute(command.toString());
@@ -198,6 +247,12 @@ public final class Mp3ExportService extends Service {
 
     private static String meta(final String value) {
         return safe(value).replace("\n", " ").replace("\r", " ");
+    }
+
+    private static int normalizeBitrate(final int value) {
+        if (value >= 256) return 320;
+        if (value <= 160) return 128;
+        return 192;
     }
 
     private static String safe(final String value) { return value == null ? "" : value; }

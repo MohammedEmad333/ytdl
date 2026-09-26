@@ -365,7 +365,8 @@ public class MainActivity extends Activity {
                     } else {
                         final List<Entry> entries = new ArrayList<>();
                         for (final Spotify.Match match : matches) {
-                            entries.add(new Entry(match.youtubeUrl, Streams.sanitize(match.spotifyTitle)));
+                            entries.add(new Entry(match.youtubeUrl, Streams.sanitize(match.spotifyTitle),
+                                    match.artist, match.coverUrl));
                         }
                         main.post(() -> showCollection("Spotify collection", entries, true));
                     }
@@ -478,6 +479,12 @@ public class MainActivity extends Activity {
         options.add(new Option("Audio", "best available · queue " + entries.size(),
                 DownloadService.Spec.audio(null, "Audio"), null, null,
                 "m4a", "audio/mp4", null, false));
+        for (final int bitrate : new int[]{320, 192, 128}) {
+            options.add(new Option("MP3 " + bitrate,
+                    "encode MP3 · queue " + entries.size()
+                            + (audioOnly ? " · preserve Spotify metadata" : ""),
+                    null, null, null, "mp3", "audio/mpeg", null, true, bitrate));
+        }
         formatAdapter.notifyDataSetChanged();
     }
 
@@ -516,8 +523,11 @@ public class MainActivity extends Activity {
         final List<AudioStream> allAudio = Streams.allAudio(info);
         if (!allAudio.isEmpty()) {
             final AudioStream best = allAudio.get(0);
-            options.add(new Option("MP3 192", "metadata + cover art · Music/YTDL",
-                    null, best.getContent(), null, "mp3", "audio/mpeg", null, true));
+            for (final int bitrate : new int[]{320, 192, 128}) {
+                options.add(new Option("MP3 " + bitrate,
+                        "metadata + cover art · Music/YTDL",
+                        null, best.getContent(), null, "mp3", "audio/mpeg", null, true, bitrate));
+            }
         }
 
         final long mergeAudioBytes = audioTracks.isEmpty() ? -1 : Streams.sizeOf(audioTracks.get(0));
@@ -592,7 +602,17 @@ public class MainActivity extends Activity {
             return;
         }
         if (option.mp3) {
-            Mp3ExportService.enqueue(this, option.videoUrl, videoTitle, currentArtist, currentCover);
+            if (!playlist.isEmpty()) {
+                for (final Entry entry : playlist) {
+                    Mp3ExportService.enqueuePage(this, entry.url, entry.title,
+                            entry.artist, entry.coverUrl, option.mp3Kbps);
+                }
+                Toast.makeText(this, "Queued " + playlist.size() + " MP3 exports",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            Mp3ExportService.enqueue(this, option.videoUrl, videoTitle, currentArtist,
+                    currentCover, option.mp3Kbps);
             Toast.makeText(this, "MP3 export queued", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -793,7 +813,19 @@ public class MainActivity extends Activity {
     private static final class Entry {
         final String url;
         final String title;
-        Entry(final String url, final String title) { this.url = url; this.title = title; }
+        final String artist;
+        final String coverUrl;
+
+        Entry(final String url, final String title) {
+            this(url, title, "", "");
+        }
+
+        Entry(final String url, final String title, final String artist, final String coverUrl) {
+            this.url = url;
+            this.title = title;
+            this.artist = artist == null ? "" : artist;
+            this.coverUrl = coverUrl == null ? "" : coverUrl;
+        }
     }
 
     private static final class Option {
@@ -806,10 +838,19 @@ public class MainActivity extends Activity {
         final String mimeType;
         final String navigateUrl;
         final boolean mp3;
+        final int mp3Kbps;
 
         Option(final String primary, final String detail, final DownloadService.Spec spec,
                final String videoUrl, final String audioUrl, final String extension,
                final String mimeType, final String navigateUrl, final boolean mp3) {
+            this(primary, detail, spec, videoUrl, audioUrl, extension, mimeType,
+                    navigateUrl, mp3, mp3 ? 192 : 0);
+        }
+
+        Option(final String primary, final String detail, final DownloadService.Spec spec,
+               final String videoUrl, final String audioUrl, final String extension,
+               final String mimeType, final String navigateUrl, final boolean mp3,
+               final int mp3Kbps) {
             this.primary = primary;
             this.detail = detail;
             this.spec = spec;
@@ -819,6 +860,7 @@ public class MainActivity extends Activity {
             this.mimeType = mimeType;
             this.navigateUrl = navigateUrl;
             this.mp3 = mp3;
+            this.mp3Kbps = mp3Kbps;
         }
 
         static Option navigate(final String title, final String source, final String url) {
