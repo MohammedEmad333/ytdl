@@ -68,10 +68,5 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <service
-            android:name=".Mp3ExportService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-
     </application>
 </manifest>
