@@ -29,4 +29,15 @@ public final class BatchControls {
             }
         }
     }
+
+    public static int retryFailed(final Context context) {
+        int count = 0;
+        for (final DownloadService.Task task : DownloadService.snapshot()) {
+            if (task.state == DownloadService.State.FAILED) {
+                DownloadService.retry(context, task);
+                count++;
+            }
+        }
+        return count;
+    }
 }
