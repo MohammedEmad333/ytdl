@@ -31,6 +31,7 @@ import android.widget.ListView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.util.LruCache;
 
 import org.schabi.newpipe.extractor.ListExtractor;
 import org.schabi.newpipe.extractor.Page;
@@ -43,6 +44,9 @@ import org.schabi.newpipe.extractor.stream.StreamInfoItem;
 import org.schabi.newpipe.extractor.stream.SubtitlesStream;
 import org.schabi.newpipe.extractor.stream.VideoStream;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
@@ -58,6 +62,16 @@ import okhttp3.Response;
 public class MainActivity extends Activity {
     private static final Pattern URL_IN_TEXT = Pattern.compile("https?://\\S+");
     private static final int PLAYLIST_CAP = 200;
+    private static final String PREFS = "downloader_prefs";
+    private static final String RECENTS = "recent_searches";
+    private static final String RECENT_DELIM = "\u001f";
+    private static final int RECENT_LIMIT = 10;
+    private static final LruCache<String, Bitmap> THUMB_CACHE =
+            new LruCache<String, Bitmap>(12 * 1024 * 1024) {
+                @Override protected int sizeOf(final String key, final Bitmap value) {
+                    return value == null ? 0 : value.getAllocationByteCount();
+                }
+            };
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -86,6 +100,9 @@ public class MainActivity extends Activity {
     private String currentCover = "";
     private String collectionName = "";
     private boolean collectionAudioOnly;
+    private MediaSearch.Session youtubeSearchSession;
+    private MediaSearch.Session soundCloudSearchSession;
+    private final List<MediaSearch.Result> searchResults = new ArrayList<>();
 
     @Override
     protected void onCreate(final Bundle savedInstanceState) {
@@ -257,6 +274,20 @@ public class MainActivity extends Activity {
         sourceParams.topMargin = Ui.dp(this, 8);
         root.addView(searchSourceSpinner, sourceParams);
 
+        final Button recent = new Button(this);
+        recent.setText("RECENT SEARCHES");
+        recent.setAllCaps(false);
+        recent.setTextColor(Ui.MUTED);
+        recent.setTextSize(Ui.size(12));
+        recent.setTypeface(Typeface.MONOSPACE);
+        recent.setStateListAnimator(null);
+        recent.setBackground(Ui.box(this, Color.TRANSPARENT, Ui.LINE, 6));
+        recent.setOnClickListener(v -> showRecentSearches());
+        final LinearLayout.LayoutParams recentParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 38));
+        recentParams.topMargin = Ui.dp(this, 8);
+        root.addView(recent, recentParams);
+
         final Button fetch = new Button(this);
         fetch.setText("FETCH / SEARCH");
         fetch.setTextColor(Ui.BG);
@@ -420,20 +451,26 @@ public class MainActivity extends Activity {
                 }
 
                 if (!looksLikeUrl(input)) {
-                    final List<MediaSearch.Result> results = new ArrayList<>();
+                    rememberSearch(input);
                     final int source = searchSourceSpinner == null ? 0
                             : searchSourceSpinner.getSelectedItemPosition();
+                    youtubeSearchSession = null;
+                    soundCloudSearchSession = null;
+                    searchResults.clear();
                     if (source == 0 || source == 1) {
-                        results.addAll(MediaSearch.youtube(input));
+                        youtubeSearchSession = MediaSearch.youtubeSession(input);
+                        searchResults.addAll(youtubeSearchSession.first());
                     }
                     if (source == 0 || source == 2) {
                         try {
-                            results.addAll(MediaSearch.soundCloud(input));
+                            soundCloudSearchSession = MediaSearch.soundCloudSession(input);
+                            searchResults.addAll(soundCloudSearchSession.first());
                         } catch (final Exception e) {
                             if (source == 2) throw e;
                         }
                     }
-                    main.post(() -> showSearch(results));
+                    final List<MediaSearch.Result> snapshot = new ArrayList<>(searchResults);
+                    main.post(() -> showSearch(snapshot));
                     return;
                 }
 
@@ -461,6 +498,9 @@ public class MainActivity extends Activity {
         collectionAll.clear();
         collectionName = "";
         collectionAudioOnly = false;
+        youtubeSearchSession = null;
+        soundCloudSearchSession = null;
+        searchResults.clear();
         audioTracks.clear();
         audioAdapter.clear();
         audioSpinner.setVisibility(View.GONE);
@@ -519,7 +559,68 @@ public class MainActivity extends Activity {
             options.add(Option.navigate(result.title, detail.toString(), result.url,
                     result.thumbnailUrl));
         }
+        final boolean more = (youtubeSearchSession != null && youtubeSearchSession.hasMore())
+                || (soundCloudSearchSession != null && soundCloudSearchSession.hasMore());
+        if (more) options.add(Option.loadMore());
         formatAdapter.notifyDataSetChanged();
+    }
+
+    private void loadMoreSearch() {
+        status.setText("Loading more…");
+        executor.execute(() -> {
+            try {
+                final List<MediaSearch.Result> more = new ArrayList<>();
+                if (youtubeSearchSession != null && youtubeSearchSession.hasMore()) {
+                    more.addAll(youtubeSearchSession.next());
+                }
+                if (soundCloudSearchSession != null && soundCloudSearchSession.hasMore()) {
+                    more.addAll(soundCloudSearchSession.next());
+                }
+                searchResults.addAll(more);
+                final List<MediaSearch.Result> snapshot = new ArrayList<>(searchResults);
+                main.post(() -> showSearch(snapshot));
+            } catch (final Exception e) {
+                main.post(() -> status.setText("Couldn't load more: " + safeMessage(e)));
+            }
+        });
+    }
+
+    private void rememberSearch(final String query) {
+        final List<String> recent = recentSearches();
+        recent.remove(query);
+        recent.add(0, query);
+        while (recent.size() > RECENT_LIMIT) recent.remove(recent.size() - 1);
+        getPreferences(MODE_PRIVATE).edit()
+                .putString(RECENTS, android.text.TextUtils.join(RECENT_DELIM, recent))
+                .apply();
+    }
+
+    private List<String> recentSearches() {
+        final String raw = getPreferences(MODE_PRIVATE).getString(RECENTS, "");
+        final List<String> out = new ArrayList<>();
+        if (raw == null || raw.isEmpty()) return out;
+        for (final String item : raw.split(RECENT_DELIM, -1)) {
+            if (!item.trim().isEmpty() && !out.contains(item)) out.add(item);
+            if (out.size() >= RECENT_LIMIT) break;
+        }
+        return out;
+    }
+
+    private void showRecentSearches() {
+        final List<String> recent = recentSearches();
+        if (recent.isEmpty()) {
+            Toast.makeText(this, "No recent searches", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Recent searches")
+                .setItems(recent.toArray(new String[0]), (d, which) -> {
+                    final String query = recent.get(which);
+                    urlInput.setText(query);
+                    fetch(query);
+                })
+                .setNegativeButton("Close", null)
+                .show();
     }
 
     private void showCollection(final String name, final List<Entry> entries,
@@ -725,14 +826,38 @@ public class MainActivity extends Activity {
     private void loadThumbnailInto(final String url, final ImageView target) {
         if (url == null || url.isEmpty() || target == null) return;
         target.setTag(url);
+        final Bitmap memory = THUMB_CACHE.get(url);
+        if (memory != null) {
+            target.setImageBitmap(memory);
+            return;
+        }
         executor.execute(() -> {
-            try (Response response = Net.HTTP.newCall(new Request.Builder()
-                    .url(url).header("User-Agent", Net.USER_AGENT).build()).execute()) {
-                if (!response.isSuccessful() || response.body() == null) return;
-                try (InputStream in = response.body().byteStream()) {
-                    final Bitmap bitmap = BitmapFactory.decodeStream(in);
-                    if (bitmap != null) main.post(() -> {
-                        if (url.equals(target.getTag())) target.setImageBitmap(bitmap);
+            final File cached = new File(getCacheDir(), "thumb-" + Integer.toHexString(url.hashCode()));
+            try {
+                Bitmap bitmap = null;
+                if (cached.exists() && cached.length() > 0) {
+                    try (InputStream in = new FileInputStream(cached)) {
+                        bitmap = BitmapFactory.decodeStream(in);
+                    }
+                }
+                if (bitmap == null) {
+                    try (Response response = Net.HTTP.newCall(new Request.Builder()
+                            .url(url).header("User-Agent", Net.USER_AGENT).build()).execute()) {
+                        if (!response.isSuccessful() || response.body() == null) return;
+                        final byte[] bytes = response.body().bytes();
+                        bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                        if (bitmap != null) {
+                            try (FileOutputStream out = new FileOutputStream(cached)) {
+                                out.write(bytes);
+                            }
+                        }
+                    }
+                }
+                if (bitmap != null) {
+                    THUMB_CACHE.put(url, bitmap);
+                    final Bitmap ready = bitmap;
+                    main.post(() -> {
+                        if (url.equals(target.getTag())) target.setImageBitmap(ready);
                     });
                 }
             } catch (final Exception ignored) {}
@@ -740,6 +865,10 @@ public class MainActivity extends Activity {
     }
 
     private void activate(final Option option) {
+        if (option.loadMore) {
+            loadMoreSearch();
+            return;
+        }
         if (option.selectCollection) {
             showCollectionPicker();
             return;
@@ -1088,12 +1217,13 @@ public class MainActivity extends Activity {
         final int mp3Kbps;
         final String thumbnailUrl;
         final boolean selectCollection;
+        final boolean loadMore;
 
         Option(final String primary, final String detail, final DownloadService.Spec spec,
                final String videoUrl, final String audioUrl, final String extension,
                final String mimeType, final String navigateUrl, final boolean mp3) {
             this(primary, detail, spec, videoUrl, audioUrl, extension, mimeType,
-                    navigateUrl, mp3, mp3 ? 192 : 0, "", false);
+                    navigateUrl, mp3, mp3 ? 192 : 0, "", false, false);
         }
 
         Option(final String primary, final String detail, final DownloadService.Spec spec,
@@ -1101,13 +1231,14 @@ public class MainActivity extends Activity {
                final String mimeType, final String navigateUrl, final boolean mp3,
                final int mp3Kbps) {
             this(primary, detail, spec, videoUrl, audioUrl, extension, mimeType,
-                    navigateUrl, mp3, mp3Kbps, "", false);
+                    navigateUrl, mp3, mp3Kbps, "", false, false);
         }
 
         Option(final String primary, final String detail, final DownloadService.Spec spec,
                final String videoUrl, final String audioUrl, final String extension,
                final String mimeType, final String navigateUrl, final boolean mp3,
-               final int mp3Kbps, final String thumbnailUrl, final boolean selectCollection) {
+               final int mp3Kbps, final String thumbnailUrl, final boolean selectCollection,
+               final boolean loadMore) {
             this.primary = primary;
             this.detail = detail;
             this.spec = spec;
@@ -1120,17 +1251,23 @@ public class MainActivity extends Activity {
             this.mp3Kbps = mp3Kbps;
             this.thumbnailUrl = thumbnailUrl == null ? "" : thumbnailUrl;
             this.selectCollection = selectCollection;
+            this.loadMore = loadMore;
         }
 
         static Option navigate(final String title, final String detail, final String url,
                                final String thumbnailUrl) {
             return new Option(title, detail, null, null, null, "", "", url,
-                    false, 0, thumbnailUrl, false);
+                    false, 0, thumbnailUrl, false, false);
         }
 
         static Option chooseCollection(final String title, final String detail) {
             return new Option(title, detail, null, null, null, "", "", null,
-                    false, 0, "", true);
+                    false, 0, "", true, false);
+        }
+
+        static Option loadMore() {
+            return new Option("Load more", "Fetch the next result page", null,
+                    null, null, "", "", null, false, 0, "", false, true);
         }
     }
 }
