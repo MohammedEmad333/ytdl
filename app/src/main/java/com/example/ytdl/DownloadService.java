@@ -20,6 +20,10 @@ import android.os.IBinder;
 import android.os.SystemClock;
 import android.provider.MediaStore;
 
+import com.arthenica.ffmpegkit.FFmpegKit;
+import com.arthenica.ffmpegkit.FFmpegSession;
+import com.arthenica.ffmpegkit.ReturnCode;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -68,6 +72,7 @@ public class DownloadService extends Service {
         MERGE,    // video-only stream + a chosen audio track, muxed together
         MUXED,    // a progressive stream that already has audio
         AUDIO,    // audio track on its own
+        MP3,      // audio encoded to MP3 with metadata / optional cover
         SUBTITLE  // caption file on its own
     }
 
@@ -87,14 +92,17 @@ public class DownloadService extends Service {
         public final String audioTrackId;
         /** Language tag for SUBTITLE. */
         public final String subtitleTag;
+        /** Target MP3 bitrate in kbps. */
+        public final int bitrateKbps;
         public final String label;
 
         private Spec(final Kind kind, final int height, final String audioTrackId,
-                     final String subtitleTag, final String label) {
+                     final String subtitleTag, final int bitrateKbps, final String label) {
             this.kind = kind;
             this.height = height;
             this.audioTrackId = audioTrackId;
             this.subtitleTag = subtitleTag;
+            this.bitrateKbps = bitrateKbps;
             this.label = label;
         }
 
@@ -102,19 +110,24 @@ public class DownloadService extends Service {
         // kinds, and a call site passing three nulls says nothing about which kind it is.
         public static Spec merge(final int height, final String audioTrackId,
                                  final String label) {
-            return new Spec(Kind.MERGE, height, audioTrackId, null, label);
+            return new Spec(Kind.MERGE, height, audioTrackId, null, 0, label);
         }
 
         public static Spec muxed(final int height, final String label) {
-            return new Spec(Kind.MUXED, height, null, null, label);
+            return new Spec(Kind.MUXED, height, null, null, 0, label);
         }
 
         public static Spec audio(final String audioTrackId, final String label) {
-            return new Spec(Kind.AUDIO, 0, audioTrackId, null, label);
+            return new Spec(Kind.AUDIO, 0, audioTrackId, null, 0, label);
+        }
+
+        public static Spec mp3(final int bitrateKbps) {
+            final int bitrate = bitrateKbps >= 256 ? 320 : bitrateKbps <= 160 ? 128 : 192;
+            return new Spec(Kind.MP3, 0, null, null, bitrate, "MP3 " + bitrate);
         }
 
         public static Spec subtitle(final String tag, final String label) {
-            return new Spec(Kind.SUBTITLE, 0, null, tag, label);
+            return new Spec(Kind.SUBTITLE, 0, null, tag, 0, label);
         }
 
         JSONObject toJson() throws JSONException {
@@ -123,6 +136,7 @@ public class DownloadService extends Service {
             o.put("height", height);
             o.putOpt("audioTrackId", audioTrackId);
             o.putOpt("subtitleTag", subtitleTag);
+            o.put("bitrateKbps", bitrateKbps);
             o.put("label", label);
             return o;
         }
@@ -131,7 +145,7 @@ public class DownloadService extends Service {
             return new Spec(Kind.valueOf(o.getString("kind")), o.getInt("height"),
                     o.isNull("audioTrackId") ? null : o.getString("audioTrackId"),
                     o.isNull("subtitleTag") ? null : o.getString("subtitleTag"),
-                    o.getString("label"));
+                    o.optInt("bitrateKbps", 0), o.getString("label"));
         }
     }
 
@@ -141,6 +155,7 @@ public class DownloadService extends Service {
         VIDEO("Video"),
         AUDIO("Audio"),
         MERGING("Merging"),
+        ENCODING("Encoding"),
         SAVING("Saving"),
         PAUSED("Paused"),
         DONE("Saved"),
@@ -160,7 +175,7 @@ public class DownloadService extends Service {
         /** A worker thread is inside this task right now. */
         public boolean active() {
             return this == RESOLVING || this == VIDEO || this == AUDIO
-                    || this == MERGING || this == SAVING;
+                    || this == MERGING || this == ENCODING || this == SAVING;
         }
 
         /** Transferring bytes, so a byte count and a rate mean something. */
@@ -185,6 +200,8 @@ public class DownloadService extends Service {
         volatile String extension = "mp4";
         volatile String mimeType = "video/mp4";
         public volatile String outputUri;
+        public volatile String artist = "";
+        public volatile String coverUrl = "";
 
         /**
          * Byte lengths from the first successful attempt, so a re-derived URL that serves
@@ -228,6 +245,8 @@ public class DownloadService extends Service {
             o.put("extension", extension);
             o.put("mimeType", mimeType);
             o.putOpt("outputUri", outputUri);
+            o.put("artist", artist);
+            o.put("coverUrl", coverUrl);
             o.put("expectedVideoBytes", expectedVideoBytes);
             o.put("expectedAudioBytes", expectedAudioBytes);
             o.put("state", state.name());
@@ -245,6 +264,8 @@ public class DownloadService extends Service {
             t.extension = o.optString("extension", "mp4");
             t.mimeType = o.optString("mimeType", "video/mp4");
             t.outputUri = o.isNull("outputUri") ? null : o.optString("outputUri", null);
+            t.artist = o.optString("artist", "");
+            t.coverUrl = o.optString("coverUrl", "");
             t.expectedVideoBytes = o.optLong("expectedVideoBytes", -1);
             t.expectedAudioBytes = o.optLong("expectedAudioBytes", -1);
             t.done = o.optLong("done", 0);
@@ -261,6 +282,12 @@ public class DownloadService extends Service {
         }
 
         /** Pre-resolved by the activity, which already extracted to show you the list. */
+        public Task metadata(final String artist, final String coverUrl) {
+            this.artist = artist == null ? "" : artist;
+            this.coverUrl = coverUrl == null ? "" : coverUrl;
+            return this;
+        }
+
         public void preResolve(final String videoUrl, final String audioUrl,
                                final String extension, final String mimeType) {
             this.videoUrl = videoUrl;
@@ -399,6 +426,7 @@ public class DownloadService extends Service {
         return eq(a.pageUrl, b.pageUrl)
                 && a.spec.kind == b.spec.kind
                 && a.spec.height == b.spec.height
+                && a.spec.bitrateKbps == b.spec.bitrateKbps
                 && eq(a.spec.audioTrackId, b.spec.audioTrackId)
                 && eq(a.spec.subtitleTag, b.spec.subtitleTag);
     }
@@ -658,7 +686,18 @@ public class DownloadService extends Service {
 
         Net.ensureExtractor();
         final StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, task.pageUrl);
-        task.title = Streams.sanitize(info.getName());
+        if (task.spec.kind != Kind.MP3 || task.title == null || task.title.trim().isEmpty()) {
+            task.title = Streams.sanitize(info.getName());
+        }
+        if (task.spec.kind == Kind.MP3) {
+            if (task.artist.isEmpty() && info.getUploaderName() != null) {
+                task.artist = info.getUploaderName();
+            }
+            if (task.coverUrl.isEmpty() && info.getThumbnails() != null
+                    && !info.getThumbnails().isEmpty()) {
+                task.coverUrl = info.getThumbnails().get(0).getUrl();
+            }
+        }
 
         switch (task.spec.kind) {
             case SUBTITLE: {
@@ -681,14 +720,16 @@ public class DownloadService extends Service {
                                 ? "text/plain" : chosen.getFormat().getMimeType());
                 break;
             }
-            case AUDIO: {
+            case AUDIO:
+            case MP3: {
                 final AudioStream a = Streams.pickAudio(
                         Streams.allAudio(info), task.spec.audioTrackId);
                 if (a == null) {
                     throw new IOException("no audio stream available");
                 }
                 task.preResolve(a.getContent(), null,
-                        Streams.suffix(a.getFormat(), "m4a"), "audio/mp4");
+                        task.spec.kind == Kind.MP3 ? "mp3" : Streams.suffix(a.getFormat(), "m4a"),
+                        task.spec.kind == Kind.MP3 ? "audio/mpeg" : "audio/mp4");
                 break;
             }
             case MUXED: {
@@ -732,7 +773,10 @@ public class DownloadService extends Service {
             report(task, done, total);
         }, control);
 
-        if (task.audioUrl != null) {
+        if (task.spec.kind == Kind.MP3) {
+            control.checkpoint();
+            encodeMp3(task, video, control);
+        } else if (task.audioUrl != null) {
             stage(task, State.AUDIO);
             Net.fetchToFile(task.audioUrl, audio, task.expectedAudioBytes, (done, total) -> {
                 if (total > 0) {
@@ -780,10 +824,108 @@ public class DownloadService extends Service {
         return new File(c.getCacheDir(), "m-" + t.id + ".mp4");
     }
 
+    private static File mp3Temp(final Context c, final Task t) {
+        return new File(c.getCacheDir(), "e-" + t.id + ".mp3");
+    }
+
+    private static File coverTemp(final Context c, final Task t) {
+        return new File(c.getCacheDir(), "c-" + t.id + ".jpg");
+    }
+
     private static void deleteTemps(final Context c, final Task t) {
         videoTemp(c, t).delete();
         audioTemp(c, t).delete();
         mergedTemp(c, t).delete();
+        mp3Temp(c, t).delete();
+        coverTemp(c, t).delete();
+    }
+
+    private void encodeMp3(final Task task, final File source, final Net.Control control)
+            throws Exception {
+        final File output = mp3Temp(this, task);
+        final File cover = coverTemp(this, task);
+
+        control.checkpoint();
+        task.state = State.ENCODING;
+        task.done = 0;
+        task.total = -1;
+        update(task);
+        save(this);
+
+        final boolean hasCover = downloadCover(task.coverUrl, cover);
+        final StringBuilder command = new StringBuilder("-y -i ")
+                .append(q(source.getAbsolutePath())).append(' ');
+        if (hasCover) {
+            command.append("-i ").append(q(cover.getAbsolutePath())).append(' ')
+                    .append("-map 0:a:0 -map 1:v:0 -c:v mjpeg -disposition:v attached_pic ");
+        } else {
+            command.append("-map 0:a:0 -vn ");
+        }
+        command.append("-c:a libmp3lame -b:a ").append(task.spec.bitrateKbps)
+                .append("k -id3v2_version 3 ")
+                .append("-metadata title=").append(q(meta(task.title))).append(' ')
+                .append("-metadata artist=").append(q(meta(task.artist))).append(' ')
+                .append(q(output.getAbsolutePath()));
+
+        final FFmpegSession session = FFmpegKit.execute(command.toString());
+        if (!ReturnCode.isSuccess(session.getReturnCode()) || !output.exists()) {
+            throw new IOException("MP3 conversion failed");
+        }
+
+        control.checkpoint();
+        task.state = State.SAVING;
+        update(task);
+        task.outputUri = publishAudio(output, task.title + ".mp3").toString();
+    }
+
+    private boolean downloadCover(final String url, final File out) {
+        if (url == null || url.isEmpty()) return false;
+        try (okhttp3.Response response = Net.HTTP.newCall(new okhttp3.Request.Builder()
+                .url(url).header("User-Agent", Net.USER_AGENT).build()).execute()) {
+            if (!response.isSuccessful() || response.body() == null) return false;
+            try (InputStream in = response.body().byteStream();
+                 OutputStream dest = new FileOutputStream(out)) {
+                final byte[] buffer = new byte[32 * 1024];
+                int n;
+                while ((n = in.read(buffer)) > 0) dest.write(buffer, 0, n);
+            }
+            return out.length() > 0;
+        } catch (final Exception ignored) {
+            return false;
+        }
+    }
+
+    private Uri publishAudio(final File source, final String displayName) throws IOException {
+        final ContentValues values = new ContentValues();
+        values.put(MediaStore.Audio.Media.DISPLAY_NAME, displayName);
+        values.put(MediaStore.Audio.Media.MIME_TYPE, "audio/mpeg");
+        values.put(MediaStore.Audio.Media.RELATIVE_PATH, "Music/YTDL");
+        values.put(MediaStore.Audio.Media.IS_PENDING, 1);
+        final Uri uri = getContentResolver().insert(
+                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values);
+        if (uri == null) throw new IOException("Couldn't create MP3 in MediaStore");
+        try (InputStream in = new FileInputStream(source);
+             OutputStream out = getContentResolver().openOutputStream(uri)) {
+            if (out == null) throw new IOException("Couldn't open MP3 destination");
+            final byte[] buffer = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
+        } catch (final Exception e) {
+            getContentResolver().delete(uri, null, null);
+            throw e instanceof IOException ? (IOException) e : new IOException(e);
+        }
+        values.clear();
+        values.put(MediaStore.Audio.Media.IS_PENDING, 0);
+        getContentResolver().update(uri, values, null, null);
+        return uri;
+    }
+
+    private static String q(final String value) {
+        return "'" + (value == null ? "" : value.replace("'", "")) + "'";
+    }
+
+    private static String meta(final String value) {
+        return value == null ? "" : value.replace("\n", " ").replace("\r", " ");
     }
 
     // ---------------------------------------------------------------- notification
