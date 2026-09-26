@@ -70,6 +70,7 @@ public class MainActivity extends Activity {
     private TextView status;
     private ImageView preview;
     private Spinner audioSpinner;
+    private Spinner searchSourceSpinner;
     private TextView fetchTabLabel;
     private TextView queueTabLabel;
     private View fetchPane;
@@ -231,6 +232,27 @@ public class MainActivity extends Activity {
         urlInput.setBackground(Ui.box(this, Ui.SURFACE, Ui.LINE, 6));
         urlInput.setPadding(Ui.dp(this, 14), Ui.dp(this, 12), Ui.dp(this, 14), Ui.dp(this, 12));
         root.addView(urlInput);
+
+        searchSourceSpinner = new Spinner(this);
+        final ArrayAdapter<String> searchSourceAdapter = new ArrayAdapter<String>(
+                this, android.R.layout.simple_spinner_item,
+                new String[]{"All sources", "YouTube", "SoundCloud"}) {
+            @Override public View getView(final int position, final View convertView,
+                                          final ViewGroup parent) {
+                final TextView v = (TextView) super.getView(position, convertView, parent);
+                v.setTextColor(Ui.TEXT);
+                v.setTypeface(Typeface.MONOSPACE);
+                v.setTextSize(Ui.size(12));
+                return v;
+            }
+        };
+        searchSourceAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        searchSourceSpinner.setAdapter(searchSourceAdapter);
+        searchSourceSpinner.setBackground(Ui.box(this, Ui.SURFACE, Ui.LINE, 6));
+        final LinearLayout.LayoutParams sourceParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 42));
+        sourceParams.topMargin = Ui.dp(this, 8);
+        root.addView(searchSourceSpinner, sourceParams);
 
         final Button fetch = new Button(this);
         fetch.setText("FETCH / SEARCH");
@@ -396,8 +418,18 @@ public class MainActivity extends Activity {
 
                 if (!looksLikeUrl(input)) {
                     final List<MediaSearch.Result> results = new ArrayList<>();
-                    results.addAll(MediaSearch.youtube(input));
-                    try { results.addAll(MediaSearch.soundCloud(input)); } catch (final Exception ignored) {}
+                    final int source = searchSourceSpinner == null ? 0
+                            : searchSourceSpinner.getSelectedItemPosition();
+                    if (source == 0 || source == 1) {
+                        results.addAll(MediaSearch.youtube(input));
+                    }
+                    if (source == 0 || source == 2) {
+                        try {
+                            results.addAll(MediaSearch.soundCloud(input));
+                        } catch (final Exception e) {
+                            if (source == 2) throw e;
+                        }
+                    }
                     main.post(() -> showSearch(results));
                     return;
                 }
@@ -474,7 +506,12 @@ public class MainActivity extends Activity {
         status.setText(results.isEmpty() ? "No search results." :
                 "Search results · tap one to preview formats before downloading.");
         for (final MediaSearch.Result result : results) {
-            options.add(Option.navigate(result.title, result.source, result.url));
+            final StringBuilder detail = new StringBuilder(result.source);
+            if (!result.uploader.isEmpty()) detail.append(" · ").append(result.uploader);
+            if (result.duration > 0) detail.append(" · ").append(formatDuration(result.duration));
+            detail.append(" · tap to preview");
+            options.add(Option.navigate(result.title, detail.toString(), result.url,
+                    result.thumbnailUrl));
         }
         formatAdapter.notifyDataSetChanged();
     }
@@ -616,6 +653,23 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void loadThumbnailInto(final String url, final ImageView target) {
+        if (url == null || url.isEmpty() || target == null) return;
+        target.setTag(url);
+        executor.execute(() -> {
+            try (Response response = Net.HTTP.newCall(new Request.Builder()
+                    .url(url).header("User-Agent", Net.USER_AGENT).build()).execute()) {
+                if (!response.isSuccessful() || response.body() == null) return;
+                try (InputStream in = response.body().byteStream()) {
+                    final Bitmap bitmap = BitmapFactory.decodeStream(in);
+                    if (bitmap != null) main.post(() -> {
+                        if (url.equals(target.getTag())) target.setImageBitmap(bitmap);
+                    });
+                }
+            } catch (final Exception ignored) {}
+        });
+    }
+
     private void activate(final Option option) {
         if (option.navigateUrl != null) {
             urlInput.setText(option.navigateUrl);
@@ -700,19 +754,35 @@ public class MainActivity extends Activity {
         @Override public long getItemId(final int p) { return p; }
         @Override public View getView(final int position, final View convertView, final ViewGroup parent) {
             final LinearLayout row = new LinearLayout(MainActivity.this);
-            row.setOrientation(LinearLayout.VERTICAL);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
             row.setBackground(Ui.pressable(MainActivity.this, Ui.SURFACE, Ui.LINE, 6));
-            row.setPadding(Ui.dp(MainActivity.this, 14), Ui.dp(MainActivity.this, 12),
-                    Ui.dp(MainActivity.this, 14), Ui.dp(MainActivity.this, 12));
+            row.setPadding(Ui.dp(MainActivity.this, 12), Ui.dp(MainActivity.this, 10),
+                    Ui.dp(MainActivity.this, 12), Ui.dp(MainActivity.this, 10));
             final Option o = options.get(position);
-            final TextView primary = Ui.mono(MainActivity.this, 16, Ui.TEXT);
+            if (o.thumbnailUrl != null && !o.thumbnailUrl.isEmpty()) {
+                final ImageView thumb = new ImageView(MainActivity.this);
+                thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                final LinearLayout.LayoutParams thumbParams = new LinearLayout.LayoutParams(
+                        Ui.dp(MainActivity.this, 96), Ui.dp(MainActivity.this, 54));
+                thumbParams.rightMargin = Ui.dp(MainActivity.this, 12);
+                row.addView(thumb, thumbParams);
+                loadThumbnailInto(o.thumbnailUrl, thumb);
+            }
+            final LinearLayout text = new LinearLayout(MainActivity.this);
+            text.setOrientation(LinearLayout.VERTICAL);
+            final TextView primary = Ui.mono(MainActivity.this, 15, Ui.TEXT);
             primary.setText(o.primary);
+            primary.setMaxLines(2);
             primary.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-            row.addView(primary);
+            text.addView(primary);
             final TextView detail = Ui.mono(MainActivity.this, 12, Ui.MUTED);
             detail.setText(o.detail);
+            detail.setMaxLines(2);
             detail.setPadding(0, Ui.dp(MainActivity.this, 3), 0, 0);
-            row.addView(detail);
+            text.addView(detail);
+            row.addView(text, new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             final LinearLayout wrap = new LinearLayout(MainActivity.this);
             wrap.setPadding(0, 0, 0, Ui.dp(MainActivity.this, 8));
             wrap.addView(row, new LinearLayout.LayoutParams(
@@ -943,18 +1013,27 @@ public class MainActivity extends Activity {
         final String navigateUrl;
         final boolean mp3;
         final int mp3Kbps;
+        final String thumbnailUrl;
 
         Option(final String primary, final String detail, final DownloadService.Spec spec,
                final String videoUrl, final String audioUrl, final String extension,
                final String mimeType, final String navigateUrl, final boolean mp3) {
             this(primary, detail, spec, videoUrl, audioUrl, extension, mimeType,
-                    navigateUrl, mp3, mp3 ? 192 : 0);
+                    navigateUrl, mp3, mp3 ? 192 : 0, "");
         }
 
         Option(final String primary, final String detail, final DownloadService.Spec spec,
                final String videoUrl, final String audioUrl, final String extension,
                final String mimeType, final String navigateUrl, final boolean mp3,
                final int mp3Kbps) {
+            this(primary, detail, spec, videoUrl, audioUrl, extension, mimeType,
+                    navigateUrl, mp3, mp3Kbps, "");
+        }
+
+        Option(final String primary, final String detail, final DownloadService.Spec spec,
+               final String videoUrl, final String audioUrl, final String extension,
+               final String mimeType, final String navigateUrl, final boolean mp3,
+               final int mp3Kbps, final String thumbnailUrl) {
             this.primary = primary;
             this.detail = detail;
             this.spec = spec;
@@ -965,11 +1044,13 @@ public class MainActivity extends Activity {
             this.navigateUrl = navigateUrl;
             this.mp3 = mp3;
             this.mp3Kbps = mp3Kbps;
+            this.thumbnailUrl = thumbnailUrl == null ? "" : thumbnailUrl;
         }
 
-        static Option navigate(final String title, final String source, final String url) {
-            return new Option(title, source + " · tap to preview", null,
-                    null, null, "", "", url, false);
+        static Option navigate(final String title, final String detail, final String url,
+                               final String thumbnailUrl) {
+            return new Option(title, detail, null, null, null, "", "", url,
+                    false, 0, thumbnailUrl);
         }
     }
 }

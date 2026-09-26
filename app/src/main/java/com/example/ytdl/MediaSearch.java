@@ -18,11 +18,18 @@ public final class MediaSearch {
         public final String title;
         public final String url;
         public final String source;
+        public final String uploader;
+        public final long duration;
+        public final String thumbnailUrl;
 
-        Result(final String title, final String url, final String source) {
+        Result(final String title, final String url, final String source,
+               final String uploader, final long duration, final String thumbnailUrl) {
             this.title = title;
             this.url = url;
             this.source = source;
+            this.uploader = uploader == null ? "" : uploader;
+            this.duration = duration;
+            this.thumbnailUrl = thumbnailUrl == null ? "" : thumbnailUrl;
         }
     }
 
@@ -44,7 +51,14 @@ public final class MediaSearch {
         for (final InfoItem item : info.getRelatedItems()) {
             if (item instanceof StreamInfoItem) {
                 final StreamInfoItem stream = (StreamInfoItem) item;
-                out.add(new Result(stream.getName(), stream.getUrl(), label));
+                String thumb = "";
+                try {
+                    if (stream.getThumbnails() != null && !stream.getThumbnails().isEmpty()) {
+                        thumb = stream.getThumbnails().get(0).getUrl();
+                    }
+                } catch (final Exception ignored) {}
+                out.add(new Result(stream.getName(), stream.getUrl(), label,
+                        stream.getUploaderName(), stream.getDuration(), thumb));
                 if (out.size() >= 20) break;
             }
         }
