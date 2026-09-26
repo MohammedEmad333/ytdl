@@ -602,21 +602,37 @@ public class MainActivity extends Activity {
             return;
         }
         if (option.mp3) {
-            if (!playlist.isEmpty()) {
-                for (final Entry entry : playlist) {
-                    Mp3ExportService.enqueuePage(this, entry.url, entry.title,
-                            entry.artist, entry.coverUrl, option.mp3Kbps);
-                }
-                Toast.makeText(this, "Queued " + playlist.size() + " MP3 exports",
-                        Toast.LENGTH_SHORT).show();
-                return;
-            }
-            Mp3ExportService.enqueue(this, option.videoUrl, videoTitle, currentArtist,
-                    currentCover, option.mp3Kbps);
-            Toast.makeText(this, "MP3 export queued", Toast.LENGTH_SHORT).show();
+            enqueueMp3(option);
             return;
         }
         enqueue(option);
+    }
+
+    private void enqueueMp3(final Option option) {
+        final DownloadService.Spec spec = DownloadService.Spec.mp3(option.mp3Kbps);
+        if (!playlist.isEmpty()) {
+            int added = 0;
+            for (final Entry entry : playlist) {
+                final DownloadService.Task task = new DownloadService.Task(
+                        entry.url, entry.title, spec).metadata(entry.artist, entry.coverUrl);
+                if (DownloadService.enqueue(this, task)) added++;
+            }
+            Toast.makeText(this, added == 0 ? "All MP3s are already in queue"
+                    : "Queued " + added + " MP3" + (added == 1 ? "" : "s"),
+                    Toast.LENGTH_SHORT).show();
+            refreshQueue();
+            selectTab(false);
+            return;
+        }
+
+        final DownloadService.Task task = new DownloadService.Task(
+                pageUrl, videoTitle, spec).metadata(currentArtist, currentCover);
+        task.preResolve(option.videoUrl, null, "mp3", "audio/mpeg");
+        final boolean added = DownloadService.enqueue(this, task);
+        Toast.makeText(this, added ? "MP3 queued" : "MP3 already in queue",
+                Toast.LENGTH_SHORT).show();
+        refreshQueue();
+        selectTab(false);
     }
 
     private void enqueue(final Option option) {
