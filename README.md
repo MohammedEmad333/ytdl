@@ -1,13 +1,27 @@
-# YouTube downloader — NewPipeExtractor + Java
+# Media Downloader — Android / Java
 
-Paste a link, pick a format, DownloadManager saves it to Downloads.
+A personal-use Android media downloader built with Java and NewPipeExtractor.
 
-No binaries anywhere. GitHub Actions builds the APK, so no local Android SDK is needed —
-you never have to open Android Studio to get a working app.
+Supported input includes YouTube, SoundCloud, and public Spotify links. Spotify support
+uses public track/album/playlist metadata to find a matching YouTube source; it does **not**
+extract or bypass Spotify audio streams.
 
-Two tabs: **Fetch** to pick formats, **Downloads** to watch the queue. Downloads run in a
-foreground service, so they continue when you leave the app and report progress in the
+Downloads are handled by an Android foreground service and saved through the Android media
+APIs, so queued work can continue when you leave the app and report progress in the
 notification bar.
+
+No Android SDK is required on your local machine to build the APK: GitHub Actions installs
+the toolchain and produces the debug artifact.
+
+## Responsible use
+
+Use this project only for media you own, media you have permission to download, or content
+whose license and applicable rules allow downloading. You are responsible for complying
+with copyright law and the terms and policies of the services you access.
+
+This project is not affiliated with, endorsed by, or sponsored by YouTube, Google, Spotify,
+or SoundCloud. Their names and trademarks belong to their respective owners.
+
 
 ## Getting the APK
 
@@ -27,7 +41,7 @@ survives being typed into a browser.
 
 Versions, since you can't easily check these from a phone: AGP 8.13.0 with Gradle 8.13
 (that pairing is from Google's own compatibility table), compileSdk 36, JDK 17.
-NewPipeExtractor v0.26.3 (June 2026) — v0.26.2 and earlier hit YouTube's SABR
+NewPipeExtractor v0.26.5 — older extractor builds may hit YouTube delivery changes such as SABR
 enforcement and return only a 360p muxed stream, with no adaptive formats at all.
 
 ## How the quality list works
@@ -221,7 +235,7 @@ download arrow hitting a floor the other.
 - Debug signing. If you switch on `minifyEnabled` for a release build later, you need
   ProGuard keep rules for Rhino or signature deobfuscation gets stripped and the app
   breaks in release only.
-- Sideload only. Play's Developer Program Policy bans apps that download YouTube content.
+- Distributed as a sideload/debug build. Review the policies of any app store or service before distributing it there.
 
 ## Why downloads are chunked
 
@@ -250,3 +264,7 @@ track, defaulted to the ranked best, and the merge reads it at download time.
 Each entry spells out its type. If they all read `(untagged)`, YouTube sent no track metadata,
 `rank()` had nothing to work with, and the dropdown is the only thing preventing a random
 language. That's worth seeing on screen rather than discovering in a finished file.
+
+## License
+
+This project is released under the MIT License. See [LICENSE](LICENSE).
