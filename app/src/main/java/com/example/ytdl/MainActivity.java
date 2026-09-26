@@ -86,6 +86,8 @@ public class MainActivity extends Activity {
     private ImageView preview;
     private Spinner audioSpinner;
     private Spinner searchSourceSpinner;
+    private Spinner searchDurationSpinner;
+    private Spinner searchSortSpinner;
     private TextView fetchTabLabel;
     private TextView queueTabLabel;
     private View fetchPane;
@@ -275,6 +277,22 @@ public class MainActivity extends Activity {
         sourceParams.topMargin = Ui.dp(this, 8);
         root.addView(searchSourceSpinner, sourceParams);
 
+        searchDurationSpinner = compactSpinner(new String[]{
+                "Any duration", "Under 4 min", "4–20 min", "20+ min"
+        });
+        final LinearLayout.LayoutParams durationParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 42));
+        durationParams.topMargin = Ui.dp(this, 8);
+        root.addView(searchDurationSpinner, durationParams);
+
+        searchSortSpinner = compactSpinner(new String[]{
+                "Relevance", "Shortest first", "Longest first"
+        });
+        final LinearLayout.LayoutParams sortParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 42));
+        sortParams.topMargin = Ui.dp(this, 8);
+        root.addView(searchSortSpinner, sortParams);
+
         final Button recent = new Button(this);
         recent.setText("RECENT SEARCHES");
         recent.setAllCaps(false);
@@ -348,6 +366,25 @@ public class MainActivity extends Activity {
         lp.topMargin = Ui.dp(this, 12);
         root.addView(list, lp);
         return root;
+    }
+
+    private Spinner compactSpinner(final String[] labels) {
+        final Spinner spinner = new Spinner(this);
+        final ArrayAdapter<String> adapter = new ArrayAdapter<String>(
+                this, android.R.layout.simple_spinner_item, labels) {
+            @Override public View getView(final int position, final View convertView,
+                                          final ViewGroup parent) {
+                final TextView v = (TextView) super.getView(position, convertView, parent);
+                v.setTextColor(Ui.TEXT);
+                v.setTypeface(Typeface.MONOSPACE);
+                v.setTextSize(Ui.size(12));
+                return v;
+            }
+        };
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinner.setAdapter(adapter);
+        spinner.setBackground(Ui.box(this, Ui.SURFACE, Ui.LINE, 6));
+        return spinner;
     }
 
     private View buildQueuePane() {
@@ -550,9 +587,25 @@ public class MainActivity extends Activity {
     private void showSearch(final List<MediaSearch.Result> results) {
         options.clear();
         playlist.clear();
-        status.setText(results.isEmpty() ? "No search results." :
-                "Search results · tap one to preview formats before downloading.");
+
+        final List<MediaSearch.Result> visible = new ArrayList<>();
+        final int durationFilter = searchDurationSpinner == null ? 0
+                : searchDurationSpinner.getSelectedItemPosition();
         for (final MediaSearch.Result result : results) {
+            if (matchesDuration(result.duration, durationFilter)) visible.add(result);
+        }
+
+        final int sort = searchSortSpinner == null ? 0 : searchSortSpinner.getSelectedItemPosition();
+        if (sort == 1) {
+            visible.sort((a, b) -> Long.compare(sortDuration(a.duration), sortDuration(b.duration)));
+        } else if (sort == 2) {
+            visible.sort((a, b) -> Long.compare(sortDuration(b.duration), sortDuration(a.duration)));
+        }
+
+        status.setText(visible.isEmpty()
+                ? (results.isEmpty() ? "No search results." : "No results match these filters.")
+                : "Search results · " + visible.size() + " shown · tap one to preview formats.");
+        for (final MediaSearch.Result result : visible) {
             final StringBuilder detail = new StringBuilder(result.source);
             if (!result.uploader.isEmpty()) detail.append(" · ").append(result.uploader);
             if (result.duration > 0) detail.append(" · ").append(formatDuration(result.duration));
@@ -564,6 +617,18 @@ public class MainActivity extends Activity {
                 || (soundCloudSearchSession != null && soundCloudSearchSession.hasMore());
         if (more) options.add(Option.loadMore());
         formatAdapter.notifyDataSetChanged();
+    }
+
+    private static boolean matchesDuration(final long duration, final int filter) {
+        if (filter == 0) return true;
+        if (duration <= 0) return false;
+        if (filter == 1) return duration < 4 * 60;
+        if (filter == 2) return duration >= 4 * 60 && duration <= 20 * 60;
+        return duration > 20 * 60;
+    }
+
+    private static long sortDuration(final long duration) {
+        return duration <= 0 ? Long.MAX_VALUE : duration;
     }
 
     private void loadMoreSearch() {
