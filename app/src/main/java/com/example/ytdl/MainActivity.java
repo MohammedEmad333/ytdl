@@ -20,6 +20,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
 import android.widget.Button;
@@ -280,6 +281,7 @@ public class MainActivity extends Activity {
         searchDurationSpinner = compactSpinner(new String[]{
                 "Any duration", "Under 4 min", "4–20 min", "20+ min"
         });
+        searchDurationSpinner.setOnItemSelectedListener(searchRefreshListener());
         final LinearLayout.LayoutParams durationParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 42));
         durationParams.topMargin = Ui.dp(this, 8);
@@ -288,6 +290,7 @@ public class MainActivity extends Activity {
         searchSortSpinner = compactSpinner(new String[]{
                 "Relevance", "Shortest first", "Longest first"
         });
+        searchSortSpinner.setOnItemSelectedListener(searchRefreshListener());
         final LinearLayout.LayoutParams sortParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 42));
         sortParams.topMargin = Ui.dp(this, 8);
@@ -366,6 +369,17 @@ public class MainActivity extends Activity {
         lp.topMargin = Ui.dp(this, 12);
         root.addView(list, lp);
         return root;
+    }
+
+    private AdapterView.OnItemSelectedListener searchRefreshListener() {
+        return new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(final AdapterView<?> parent, final View view,
+                                                 final int position, final long id) {
+                if (!searchResults.isEmpty()) showSearch(new ArrayList<>(searchResults));
+            }
+
+            @Override public void onNothingSelected(final AdapterView<?> parent) {}
+        };
     }
 
     private Spinner compactSpinner(final String[] labels) {
@@ -497,12 +511,12 @@ public class MainActivity extends Activity {
                     searchResults.clear();
                     if (source == 0 || source == 1) {
                         youtubeSearchSession = MediaSearch.youtubeSession(input);
-                        searchResults.addAll(youtubeSearchSession.first());
+                        appendUniqueSearchResults(searchResults, youtubeSearchSession.first());
                     }
                     if (source == 0 || source == 2) {
                         try {
                             soundCloudSearchSession = MediaSearch.soundCloudSession(input);
-                            searchResults.addAll(soundCloudSearchSession.first());
+                            appendUniqueSearchResults(searchResults, soundCloudSearchSession.first());
                         } catch (final Exception e) {
                             if (source == 2) throw e;
                         }
@@ -631,6 +645,20 @@ public class MainActivity extends Activity {
         return duration <= 0 ? Long.MAX_VALUE : duration;
     }
 
+    private static void appendUniqueSearchResults(final List<MediaSearch.Result> target,
+                                                  final List<MediaSearch.Result> incoming) {
+        for (final MediaSearch.Result candidate : incoming) {
+            boolean duplicate = false;
+            for (final MediaSearch.Result existing : target) {
+                if (candidate.url.equals(existing.url)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) target.add(candidate);
+        }
+    }
+
     private void loadMoreSearch() {
         status.setText("Loading more…");
         executor.execute(() -> {
@@ -642,7 +670,7 @@ public class MainActivity extends Activity {
                 if (soundCloudSearchSession != null && soundCloudSearchSession.hasMore()) {
                     more.addAll(soundCloudSearchSession.next());
                 }
-                searchResults.addAll(more);
+                appendUniqueSearchResults(searchResults, more);
                 final List<MediaSearch.Result> snapshot = new ArrayList<>(searchResults);
                 main.post(() -> showSearch(snapshot));
             } catch (final Exception e) {
