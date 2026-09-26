@@ -306,6 +306,27 @@ public class MainActivity extends Activity {
         actions.addView(smallButton(this, "Cancel all", Ui.MUTED, v -> BatchControls.cancelAll(this)));
         root.addView(actions);
 
+        final Button retryFailed = new Button(this);
+        retryFailed.setText("RETRY FAILED");
+        retryFailed.setAllCaps(false);
+        retryFailed.setTextColor(Ui.ERR);
+        retryFailed.setTextSize(Ui.size(12));
+        retryFailed.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        retryFailed.setStateListAnimator(null);
+        retryFailed.setBackground(Ui.box(this, Color.TRANSPARENT, Ui.LINE, 6));
+        retryFailed.setOnClickListener(v -> {
+            final int count = BatchControls.retryFailed(this);
+            Toast.makeText(this, count == 0 ? "No failed downloads"
+                    : "Retrying " + count + (count == 1 ? " download" : " downloads"),
+                    Toast.LENGTH_SHORT).show();
+            refreshQueue();
+        });
+        final LinearLayout.LayoutParams retryParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 38));
+        retryParams.topMargin = Ui.dp(this, 8);
+        retryParams.bottomMargin = Ui.dp(this, 8);
+        root.addView(retryFailed, retryParams);
+
         final Button history = new Button(this);
         history.setText("HISTORY");
         history.setAllCaps(false);
