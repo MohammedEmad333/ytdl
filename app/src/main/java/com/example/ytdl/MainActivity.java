@@ -359,7 +359,8 @@ public class MainActivity extends Activity {
                         final StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, match.youtubeUrl);
                         main.post(() -> {
                             pageUrl = match.youtubeUrl;
-                            showMedia(info, "Spotify → YouTube");
+                            showMedia(info, "Spotify → YouTube", match.spotifyTitle,
+                                    match.artist, match.coverUrl);
                         });
                     } else {
                         final List<Entry> entries = new ArrayList<>();
@@ -481,13 +482,22 @@ public class MainActivity extends Activity {
     }
 
     private void showMedia(final StreamInfo info, final String source) {
+        showMedia(info, source, "", "", "");
+    }
+
+    private void showMedia(final StreamInfo info, final String source, final String titleOverride,
+                           final String artistOverride, final String coverOverride) {
         options.clear();
         playlist.clear();
         audioTracks.clear();
         audioAdapter.clear();
-        videoTitle = Streams.sanitize(info.getName());
-        currentArtist = info.getUploaderName() == null ? "" : info.getUploaderName();
-        currentCover = firstThumbnail(info);
+        final String sourceTitle = titleOverride == null || titleOverride.trim().isEmpty()
+                ? info.getName() : titleOverride;
+        videoTitle = Streams.sanitize(sourceTitle);
+        currentArtist = artistOverride == null || artistOverride.trim().isEmpty()
+                ? (info.getUploaderName() == null ? "" : info.getUploaderName()) : artistOverride;
+        currentCover = coverOverride == null || coverOverride.trim().isEmpty()
+                ? firstThumbnail(info) : coverOverride;
         loadThumbnail(currentCover);
 
         audioTracks.addAll(Streams.mergeAudio(info));
@@ -498,7 +508,7 @@ public class MainActivity extends Activity {
 
         final long duration = info.getDuration();
         final StringBuilder header = new StringBuilder(source).append("\n")
-                .append(info.getName());
+                .append(sourceTitle);
         if (!currentArtist.isEmpty()) header.append("\n").append(currentArtist);
         if (duration > 0) header.append("\n").append(formatDuration(duration));
         status.setText(header.toString());
