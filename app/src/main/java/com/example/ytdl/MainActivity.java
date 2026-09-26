@@ -95,6 +95,8 @@ public class MainActivity extends Activity {
     private View queuePane;
     private FormatAdapter formatAdapter;
     private QueueAdapter queueAdapter;
+    private Spinner queueFilterSpinner;
+    private Spinner queueSortSpinner;
     private ArrayAdapter<String> audioAdapter;
 
     private String pageUrl = "";
@@ -371,6 +373,17 @@ public class MainActivity extends Activity {
         return root;
     }
 
+    private AdapterView.OnItemSelectedListener queueRefreshListener() {
+        return new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(final AdapterView<?> parent, final View view,
+                                                 final int position, final long id) {
+                refreshQueue();
+            }
+
+            @Override public void onNothingSelected(final AdapterView<?> parent) {}
+        };
+    }
+
     private AdapterView.OnItemSelectedListener searchRefreshListener() {
         return new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(final AdapterView<?> parent, final View view,
@@ -406,6 +419,24 @@ public class MainActivity extends Activity {
         final LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(pad, Ui.dp(this, 12), pad, Ui.dp(this, 12));
+
+        queueFilterSpinner = compactSpinner(new String[]{
+                "All downloads", "Active", "Queued / paused", "Finished", "Failed"
+        });
+        queueFilterSpinner.setOnItemSelectedListener(queueRefreshListener());
+        final LinearLayout.LayoutParams queueFilterParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 42));
+        queueFilterParams.bottomMargin = Ui.dp(this, 8);
+        root.addView(queueFilterSpinner, queueFilterParams);
+
+        queueSortSpinner = compactSpinner(new String[]{
+                "Queue order", "Newest first", "Oldest first", "Progress high → low"
+        });
+        queueSortSpinner.setOnItemSelectedListener(queueRefreshListener());
+        final LinearLayout.LayoutParams queueSortParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 42));
+        queueSortParams.bottomMargin = Ui.dp(this, 8);
+        root.addView(queueSortSpinner, queueSortParams);
 
         final LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -1247,15 +1278,47 @@ public class MainActivity extends Activity {
     };
 
     private void refreshQueue() {
-        queueSnapshot = DownloadService.snapshot();
+        final List<DownloadService.Task> all = DownloadService.snapshot();
         int remaining = 0;
-        for (final DownloadService.Task task : queueSnapshot) {
+        for (final DownloadService.Task task : all) {
             if (!task.state.finished()) remaining++;
         }
+
+        final int filter = queueFilterSpinner == null ? 0
+                : queueFilterSpinner.getSelectedItemPosition();
+        final List<DownloadService.Task> visible = new ArrayList<>();
+        for (final DownloadService.Task task : all) {
+            if (matchesQueueFilter(task, filter)) visible.add(task);
+        }
+
+        final int sort = queueSortSpinner == null ? 0 : queueSortSpinner.getSelectedItemPosition();
+        if (sort == 1) {
+            visible.sort((a, b) -> Long.compare(b.id, a.id));
+        } else if (sort == 2) {
+            visible.sort((a, b) -> Long.compare(a.id, b.id));
+        } else if (sort == 3) {
+            visible.sort((a, b) -> Integer.compare(b.percent(), a.percent()));
+        }
+
+        queueSnapshot = visible;
         if (queueTabLabel != null) {
             queueTabLabel.setText(remaining > 0 ? "DOWNLOADS (" + remaining + ")" : "DOWNLOADS");
         }
         if (queueAdapter != null) queueAdapter.notifyDataSetChanged();
+    }
+
+    private static boolean matchesQueueFilter(final DownloadService.Task task, final int filter) {
+        if (filter == 0) return true;
+        if (filter == 1) return task.state.active();
+        if (filter == 2) {
+            return task.state == DownloadService.State.QUEUED
+                    || task.state == DownloadService.State.PAUSED;
+        }
+        if (filter == 3) {
+            return task.state == DownloadService.State.DONE
+                    || task.state == DownloadService.State.CANCELLED;
+        }
+        return task.state == DownloadService.State.FAILED;
     }
 
     private static String metaLine(final DownloadService.Task task) {
