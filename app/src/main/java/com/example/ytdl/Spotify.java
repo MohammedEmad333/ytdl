@@ -30,6 +30,8 @@ public final class Spotify {
     private static final Pattern OG_TITLE_REVERSED = Pattern.compile("(?is)<meta[^>]+content=[\\\"'](.*?)[\\\"'][^>]+property=[\\\"']og:title[\\\"'][^>]*>");
     private static final Pattern OG_DESCRIPTION = Pattern.compile("(?is)<meta[^>]+property=[\\\"']og:description[\\\"'][^>]+content=[\\\"'](.*?)[\\\"'][^>]*>");
     private static final Pattern OG_DESCRIPTION_REVERSED = Pattern.compile("(?is)<meta[^>]+content=[\\\"'](.*?)[\\\"'][^>]+property=[\\\"']og:description[\\\"'][^>]*>");
+    private static final Pattern OG_IMAGE = Pattern.compile("(?is)<meta[^>]+property=[\\\"\']og:image[\\\"\'][^>]+content=[\\\"\'](.*?)[\\\"\'][^>]*>");
+    private static final Pattern OG_IMAGE_REVERSED = Pattern.compile("(?is)<meta[^>]+content=[\\\"\'](.*?)[\\\"\'][^>]+property=[\\\"\']og:image[\\\"\'][^>]*>");
     private static final Pattern TRACK_URI_THEN_NAME = Pattern.compile("(?is)spotify:track:([A-Za-z0-9]+).{0,500}?\\\"name\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
     private static final Pattern NAME_THEN_TRACK_URI = Pattern.compile("(?is)\\\"name\\\"\\s*:\\s*\\\"([^\\\"]+)\\\".{0,500}?spotify:track:([A-Za-z0-9]+)");
     private static final Pattern TRACK_LINK = Pattern.compile("(?is)https://open\\.spotify\\.com/track/([A-Za-z0-9]+)");
