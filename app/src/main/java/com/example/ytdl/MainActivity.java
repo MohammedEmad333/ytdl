@@ -49,9 +49,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -66,9 +64,14 @@ public class MainActivity extends Activity {
     private static final int PLAYLIST_CAP = 200;
     private static final String PREFS = "downloader_prefs";
     private static final String RECENTS = "recent_searches";
+    private static final String RECENT_DELIM = "\u001f";
     private static final int RECENT_LIMIT = 10;
     private static final LruCache<String, Bitmap> THUMB_CACHE =
-            new LruCache<>(12 * 1024 * 1024);
+            new LruCache<String, Bitmap>(12 * 1024 * 1024) {
+                @Override protected int sizeOf(final String key, final Bitmap value) {
+                    return value == null ? 0 : value.getAllocationByteCount();
+                }
+            };
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -583,22 +586,28 @@ public class MainActivity extends Activity {
     }
 
     private void rememberSearch(final String query) {
-        final Set<String> recent = new LinkedHashSet<>();
-        recent.add(query);
-        recent.addAll(getPreferences(MODE_PRIVATE)
-                .getStringSet(RECENTS, new LinkedHashSet<>()));
-        final LinkedHashSet<String> trimmed = new LinkedHashSet<>();
-        for (final String item : recent) {
-            if (item != null && !item.trim().isEmpty()) trimmed.add(item);
-            if (trimmed.size() >= RECENT_LIMIT) break;
+        final List<String> recent = recentSearches();
+        recent.remove(query);
+        recent.add(0, query);
+        while (recent.size() > RECENT_LIMIT) recent.remove(recent.size() - 1);
+        getPreferences(MODE_PRIVATE).edit()
+                .putString(RECENTS, android.text.TextUtils.join(RECENT_DELIM, recent))
+                .apply();
+    }
+
+    private List<String> recentSearches() {
+        final String raw = getPreferences(MODE_PRIVATE).getString(RECENTS, "");
+        final List<String> out = new ArrayList<>();
+        if (raw == null || raw.isEmpty()) return out;
+        for (final String item : raw.split(RECENT_DELIM, -1)) {
+            if (!item.trim().isEmpty() && !out.contains(item)) out.add(item);
+            if (out.size() >= RECENT_LIMIT) break;
         }
-        getPreferences(MODE_PRIVATE).edit().putStringSet(RECENTS, trimmed).apply();
+        return out;
     }
 
     private void showRecentSearches() {
-        final Set<String> stored = getPreferences(MODE_PRIVATE)
-                .getStringSet(RECENTS, new LinkedHashSet<>());
-        final List<String> recent = new ArrayList<>(stored);
+        final List<String> recent = recentSearches();
         if (recent.isEmpty()) {
             Toast.makeText(this, "No recent searches", Toast.LENGTH_SHORT).show();
             return;
