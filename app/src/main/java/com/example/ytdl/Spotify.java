@@ -30,6 +30,8 @@ public final class Spotify {
     private static final Pattern OG_TITLE_REVERSED = Pattern.compile("(?is)<meta[^>]+content=[\\\"'](.*?)[\\\"'][^>]+property=[\\\"']og:title[\\\"'][^>]*>");
     private static final Pattern OG_DESCRIPTION = Pattern.compile("(?is)<meta[^>]+property=[\\\"']og:description[\\\"'][^>]+content=[\\\"'](.*?)[\\\"'][^>]*>");
     private static final Pattern OG_DESCRIPTION_REVERSED = Pattern.compile("(?is)<meta[^>]+content=[\\\"'](.*?)[\\\"'][^>]+property=[\\\"']og:description[\\\"'][^>]*>");
+    private static final Pattern OG_IMAGE = Pattern.compile("(?is)<meta[^>]+property=[\\\"\']og:image[\\\"\'][^>]+content=[\\\"\'](.*?)[\\\"\'][^>]*>");
+    private static final Pattern OG_IMAGE_REVERSED = Pattern.compile("(?is)<meta[^>]+content=[\\\"\'](.*?)[\\\"\'][^>]+property=[\\\"\']og:image[\\\"\'][^>]*>");
     private static final Pattern TRACK_URI_THEN_NAME = Pattern.compile("(?is)spotify:track:([A-Za-z0-9]+).{0,500}?\\\"name\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
     private static final Pattern NAME_THEN_TRACK_URI = Pattern.compile("(?is)\\\"name\\\"\\s*:\\s*\\\"([^\\\"]+)\\\".{0,500}?spotify:track:([A-Za-z0-9]+)");
     private static final Pattern TRACK_LINK = Pattern.compile("(?is)https://open\\.spotify\\.com/track/([A-Za-z0-9]+)");
@@ -70,9 +72,9 @@ public final class Spotify {
         final List<Match> matches = new ArrayList<>();
         for (int i = 0; i < tracks.size() && i < COLLECTION_CAP; i++) {
             final Track track = tracks.get(i);
-            final int progress = i + 1;
             try {
-                matches.add(match(track.title, track.artist));
+                final Track metadata = enrichTrack(track);
+                matches.add(match(metadata.title, metadata.artist, metadata.coverUrl));
             } catch (final Exception ignored) {
                 // One unavailable song should not discard the whole collection.
             }
@@ -93,10 +95,15 @@ public final class Spotify {
         description = cleanDescription(description);
         if (title.isEmpty()) throw new IOException("Spotify did not expose the track title.");
         final String artist = artistFromDescription(title, description);
-        return match(title, artist);
+        final String coverUrl = meta(html, OG_IMAGE, OG_IMAGE_REVERSED);
+        return match(title, artist, coverUrl);
     }
 
     private static Match match(final String title, final String artist) throws Exception {
+        return match(title, artist, "");
+    }
+
+    private static Match match(final String title, final String artist, final String coverUrl) throws Exception {
         final String query = (artist.isEmpty() ? title : title + " " + artist) + " official audio";
         final SearchExtractor extractor = ServiceList.YouTube.getSearchExtractor(query);
         extractor.fetchPage();
@@ -114,7 +121,7 @@ public final class Spotify {
             }
         }
         if (best == null) throw new IOException("No matching YouTube result for “" + title + "”.");
-        return new Match(title, artist, query, best.getUrl(), best.getName());
+        return new Match(title, artist, coverUrl, query, best.getUrl(), best.getName());
     }
 
     private static int score(final String title, final String artist, final String candidate) {
@@ -157,8 +164,8 @@ public final class Spotify {
                     try {
                         final String url = "https://open.spotify.com/track/" + id;
                         final Page trackPage = fetchPage(url);
-                        String title = cleanTitle(meta(trackPage.html, OG_TITLE, OG_TITLE_REVERSED));
-                        if (!title.isEmpty()) tracks.add(new Track(id, title, ""));
+                        final Track track = trackMetadata(id, trackPage.html, "");
+                        if (!track.title.isEmpty()) tracks.add(track);
                     } catch (final Exception ignored) {}
                 }
             }
@@ -172,8 +179,27 @@ public final class Spotify {
         while (matcher.find() && out.size() < COLLECTION_CAP) {
             final String id = nameFirst ? matcher.group(2) : matcher.group(1);
             final String name = decode(nameFirst ? matcher.group(1) : matcher.group(2));
-            if (seen.add(id) && !name.trim().isEmpty()) out.add(new Track(id, cleanTitle(name), ""));
+            if (seen.add(id) && !name.trim().isEmpty()) out.add(new Track(id, cleanTitle(name), "", ""));
         }
+    }
+
+    private static Track enrichTrack(final Track track) {
+        if (!track.artist.isEmpty() && !track.coverUrl.isEmpty()) return track;
+        try {
+            final Page page = fetchPage("https://open.spotify.com/track/" + track.id);
+            return trackMetadata(track.id, page.html, track.title);
+        } catch (final Exception ignored) {
+            return track;
+        }
+    }
+
+    private static Track trackMetadata(final String id, final String html, final String fallbackTitle) {
+        String title = cleanTitle(meta(html, OG_TITLE, OG_TITLE_REVERSED));
+        if (title.isEmpty()) title = fallbackTitle;
+        final String description = cleanDescription(meta(html, OG_DESCRIPTION, OG_DESCRIPTION_REVERSED));
+        final String artist = artistFromDescription(title, description);
+        final String coverUrl = meta(html, OG_IMAGE, OG_IMAGE_REVERSED);
+        return new Track(id, title, artist, coverUrl);
     }
 
     private static boolean isTrackUrl(final String url) {
@@ -246,14 +272,16 @@ public final class Spotify {
     public static final class Match {
         public final String spotifyTitle;
         public final String artist;
+        public final String coverUrl;
         public final String query;
         public final String youtubeUrl;
         public final String youtubeTitle;
 
-        Match(final String spotifyTitle, final String artist, final String query,
+        Match(final String spotifyTitle, final String artist, final String coverUrl, final String query,
               final String youtubeUrl, final String youtubeTitle) {
             this.spotifyTitle = spotifyTitle;
             this.artist = artist;
+            this.coverUrl = coverUrl;
             this.query = query;
             this.youtubeUrl = youtubeUrl;
             this.youtubeTitle = youtubeTitle;
@@ -264,8 +292,9 @@ public final class Spotify {
         final String id;
         final String title;
         final String artist;
-        Track(final String id, final String title, final String artist) {
-            this.id = id; this.title = title; this.artist = artist;
+        final String coverUrl;
+        Track(final String id, final String title, final String artist, final String coverUrl) {
+            this.id = id; this.title = title; this.artist = artist; this.coverUrl = coverUrl;
         }
     }
 
