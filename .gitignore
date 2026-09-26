@@ -3,3 +3,10 @@ build/
 local.properties
 *.apk
 .idea/
+*.aab
+*.jks
+*.keystore
+key.properties
+keystore.properties
+.env
+.env.*
