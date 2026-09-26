@@ -28,6 +28,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.schabi.newpipe.extractor.ServiceList;
+import org.schabi.newpipe.extractor.StreamingService;
 import org.schabi.newpipe.extractor.stream.AudioStream;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.stream.SubtitlesStream;
@@ -458,6 +459,7 @@ public class DownloadService extends Service {
      */
     public static void retry(final Context context, final Task task) {
         task.error = null;
+        task.outputUri = null;
         task.cancelled = false;
         task.pauseRequested = false;
         task.videoUrl = null;
@@ -680,12 +682,21 @@ public class DownloadService extends Service {
      * are the same question — "what should this be, today?" — which is why the Task carries
      * an intention rather than a pair of URLs.
      */
+    private static StreamingService serviceFor(final String url) {
+        try {
+            if (ServiceList.SoundCloud.getLinkTypeByUrl(url) != StreamingService.LinkType.NONE) {
+                return ServiceList.SoundCloud;
+            }
+        } catch (final Exception ignored) {}
+        return ServiceList.YouTube;
+    }
+
     private void resolve(final Task task) throws Exception {
         task.state = State.RESOLVING;
         update(task);
 
         Net.ensureExtractor();
-        final StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, task.pageUrl);
+        final StreamInfo info = StreamInfo.getInfo(serviceFor(task.pageUrl), task.pageUrl);
         if (task.spec.kind != Kind.MP3 || task.title == null || task.title.trim().isEmpty()) {
             task.title = Streams.sanitize(info.getName());
         }
