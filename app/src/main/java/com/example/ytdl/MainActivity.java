@@ -261,19 +261,20 @@ public class MainActivity extends Activity {
         urlInput.setPadding(Ui.dp(this, 14), Ui.dp(this, 12), Ui.dp(this, 14), Ui.dp(this, 12));
         root.addView(urlInput);
 
-        final Button paste = new Button(this);
-        paste.setText("PASTE FROM CLIPBOARD");
-        paste.setAllCaps(false);
-        paste.setTextColor(Ui.MUTED);
-        paste.setTextSize(Ui.size(12));
-        paste.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        paste.setStateListAnimator(null);
-        paste.setBackground(Ui.box(this, Color.TRANSPARENT, Ui.LINE, 6));
-        paste.setOnClickListener(v -> pasteFromClipboard());
-        final LinearLayout.LayoutParams pasteParams = new LinearLayout.LayoutParams(
+        final LinearLayout clipboardActions = new LinearLayout(this);
+        clipboardActions.setOrientation(LinearLayout.HORIZONTAL);
+
+        final Button paste = smallButton(this, "Paste", Ui.MUTED, v -> pasteFromClipboard());
+        clipboardActions.addView(paste);
+
+        final Button pasteFetch = smallButton(this, "Paste & fetch", Ui.ACCENT,
+                v -> pasteAndFetchFromClipboard());
+        clipboardActions.addView(pasteFetch);
+
+        final LinearLayout.LayoutParams clipboardParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 38));
-        pasteParams.topMargin = Ui.dp(this, 8);
-        root.addView(paste, pasteParams);
+        clipboardParams.topMargin = Ui.dp(this, 8);
+        root.addView(clipboardActions, clipboardParams);
 
         searchSourceSpinner = new Spinner(this);
         final ArrayAdapter<String> searchSourceAdapter = new ArrayAdapter<String>(
@@ -389,25 +390,60 @@ public class MainActivity extends Activity {
         return root;
     }
 
-    private void pasteFromClipboard() {
+    private String clipboardText() {
         final android.content.ClipboardManager clipboard =
                 getSystemService(android.content.ClipboardManager.class);
         if (clipboard == null || !clipboard.hasPrimaryClip()
                 || clipboard.getPrimaryClip() == null
                 || clipboard.getPrimaryClip().getItemCount() == 0) {
-            Toast.makeText(this, "Clipboard is empty", Toast.LENGTH_SHORT).show();
-            return;
+            return null;
         }
-
         final CharSequence text = clipboard.getPrimaryClip().getItemAt(0).coerceToText(this);
-        if (text == null || text.toString().trim().isEmpty()) {
+        if (text == null) return null;
+        final String value = text.toString().trim();
+        return value.isEmpty() ? null : value;
+    }
+
+    private void pasteFromClipboard() {
+        final String value = clipboardText();
+        if (value == null) {
             Toast.makeText(this, "Clipboard has no text", Toast.LENGTH_SHORT).show();
             return;
         }
-
-        final String value = text.toString().trim();
         urlInput.setText(value);
         urlInput.setSelection(value.length());
+    }
+
+    private void pasteAndFetchFromClipboard() {
+        final String value = clipboardText();
+        if (value == null) {
+            Toast.makeText(this, "Clipboard has no text", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!isSupportedMediaLink(value)) {
+            Toast.makeText(this, "Clipboard doesn't contain a supported media link",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        urlInput.setText(value);
+        urlInput.setSelection(value.length());
+        fetch(value);
+    }
+
+    private static boolean isSupportedMediaLink(final String value) {
+        if (!looksLikeUrl(value)) return false;
+        if (Spotify.isSpotifyUrl(value)) return true;
+        try {
+            if (ServiceList.YouTube.getLinkTypeByUrl(value) != StreamingService.LinkType.NONE) {
+                return true;
+            }
+        } catch (final Exception ignored) {}
+        try {
+            return ServiceList.SoundCloud.getLinkTypeByUrl(value)
+                    != StreamingService.LinkType.NONE;
+        } catch (final Exception ignored) {
+            return false;
+        }
     }
 
     private AdapterView.OnItemSelectedListener queueRefreshListener() {
