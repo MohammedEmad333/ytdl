@@ -73,6 +73,7 @@ public class DownloadService extends Service {
     public static final String ACTION_CANCEL = "cancel";
     private static final String PREFS = "downloader_prefs";
     private static final String PREF_WIFI_ONLY = "wifi_only";
+    private static final String PREF_PAUSE_AFTER_CURRENT = "pause_after_current";
 
     /** What kind of file was asked for. */
     public enum Kind {
@@ -493,6 +494,8 @@ public class DownloadService extends Service {
             return changed;
         }
         PAUSE_AFTER_CURRENT.set(true);
+        context.getSharedPreferences(PREFS, MODE_PRIVATE)
+                .edit().putBoolean(PREF_PAUSE_AFTER_CURRENT, true).apply();
         return true;
     }
 
@@ -500,8 +503,10 @@ public class DownloadService extends Service {
         return PAUSE_AFTER_CURRENT.get();
     }
 
-    public static void cancelPauseAfterCurrent() {
+    public static void cancelPauseAfterCurrent(final Context context) {
         PAUSE_AFTER_CURRENT.set(false);
+        context.getSharedPreferences(PREFS, MODE_PRIVATE)
+                .edit().putBoolean(PREF_PAUSE_AFTER_CURRENT, false).apply();
     }
 
     public static boolean moveUp(final Context context, final Task task) {
@@ -630,6 +635,8 @@ public class DownloadService extends Service {
     public void onCreate() {
         super.onCreate();
         ensureLoaded(this);
+        PAUSE_AFTER_CURRENT.set(getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getBoolean(PREF_PAUSE_AFTER_CURRENT, false));
         final ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         if (cm != null) {
             networkCallback = new ConnectivityManager.NetworkCallback() {
@@ -713,6 +720,8 @@ public class DownloadService extends Service {
             while ((task = nextQueued()) != null) {
                 process(task);
                 if (PAUSE_AFTER_CURRENT.getAndSet(false)) {
+                    getSharedPreferences(PREFS, MODE_PRIVATE)
+                            .edit().putBoolean(PREF_PAUSE_AFTER_CURRENT, false).apply();
                     pauseQueuedTasks();
                     break;
                 }

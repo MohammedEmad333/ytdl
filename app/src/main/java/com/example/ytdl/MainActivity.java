@@ -470,7 +470,7 @@ public class MainActivity extends Activity {
         pauseAfterCurrent.setBackground(Ui.box(this, Color.TRANSPARENT, Ui.LINE, 6));
         pauseAfterCurrent.setOnClickListener(v -> {
             if (DownloadService.isPauseAfterCurrentPending()) {
-                DownloadService.cancelPauseAfterCurrent();
+                DownloadService.cancelPauseAfterCurrent(this);
                 Toast.makeText(this, "Pause-after-current cancelled", Toast.LENGTH_SHORT).show();
             } else {
                 final boolean armed = DownloadService.pauseAfterCurrent(this);

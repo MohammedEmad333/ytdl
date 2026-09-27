@@ -7,7 +7,7 @@ public final class BatchControls {
     private BatchControls() {}
 
     public static void pauseAll(final Context context) {
-        DownloadService.cancelPauseAfterCurrent();
+        DownloadService.cancelPauseAfterCurrent(context);
         for (final DownloadService.Task task : DownloadService.snapshot()) {
             if (!task.state.finished() && task.state != DownloadService.State.PAUSED) {
                 DownloadService.pause(context, task);
@@ -16,7 +16,7 @@ public final class BatchControls {
     }
 
     public static void resumeAll(final Context context) {
-        DownloadService.cancelPauseAfterCurrent();
+        DownloadService.cancelPauseAfterCurrent(context);
         for (final DownloadService.Task task : DownloadService.snapshot()) {
             if (task.state == DownloadService.State.PAUSED) {
                 DownloadService.resume(context, task);
