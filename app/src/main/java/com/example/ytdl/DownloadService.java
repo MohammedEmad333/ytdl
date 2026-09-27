@@ -431,6 +431,10 @@ public class DownloadService extends Service {
         }
     }
 
+    public static boolean isWifiConnectedForUi(final Context context) {
+        return isWifiConnected(context);
+    }
+
     private static boolean isWifiConnected(final Context context) {
         final ConnectivityManager cm = context.getSystemService(ConnectivityManager.class);
         if (cm == null) return false;
@@ -686,6 +690,10 @@ public class DownloadService extends Service {
         if (wifiOnly(this) && !isWifiConnected(this)) {
             return null;
         }
+        return nextQueuedIgnoringWifi();
+    }
+
+    private Task nextQueuedIgnoringWifi() {
         synchronized (TASKS) {
             for (final Task t : TASKS) {
                 if (t.state == State.QUEUED && !t.cancelled && !t.pauseRequested) {
@@ -710,8 +718,14 @@ public class DownloadService extends Service {
             }
         }
 
-        final StringBuilder summary = new StringBuilder()
-                .append(saved).append(saved == 1 ? " file saved" : " files saved");
+        final boolean waitingForWifi = wifiOnly(this) && !isWifiConnected(this)
+                && nextQueuedIgnoringWifi() != null;
+        final StringBuilder summary = new StringBuilder();
+        if (waitingForWifi) {
+            summary.append("Waiting for Wi-Fi");
+        } else {
+            summary.append(saved).append(saved == 1 ? " file saved" : " files saved");
+        }
         if (failed > 0) {
             summary.append(" · ").append(failed).append(" failed");
         }
