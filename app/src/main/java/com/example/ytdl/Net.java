@@ -191,11 +191,23 @@ public final class Net {
                                 throw new UnsafeResume("server ignored resume range at "
                                         + requestStart + " bytes");
                             }
-                            final long contentRangeStart =
-                                    contentRangeStart(response.header("Content-Range"));
+                            final String contentRange = response.header("Content-Range");
+                            final long contentRangeStart = contentRangeStart(contentRange);
+                            final long contentRangeEnd = contentRangeEnd(contentRange);
+                            final long contentRangeTotal = contentRangeTotal(contentRange);
+                            final long requestedEnd = requestStart + CHUNK_BYTES - 1;
                             if (contentRangeStart != requestStart) {
                                 throw new UnsafeResume("resume range mismatch (requested "
                                         + requestStart + ", got " + contentRangeStart + ")");
+                            }
+                            if (contentRangeEnd < contentRangeStart
+                                    || contentRangeEnd > requestedEnd) {
+                                throw new UnsafeResume("invalid Content-Range end "
+                                        + contentRangeEnd + " for requested end " + requestedEnd);
+                            }
+                            if (contentRangeTotal > 0 && contentRangeEnd >= contentRangeTotal) {
+                                throw new UnsafeResume("invalid Content-Range total "
+                                        + contentRangeTotal + " for end " + contentRangeEnd);
                             }
                         }
 
@@ -303,6 +315,31 @@ public final class Net {
         if (slash < 0 || slash + 1 >= contentRange.length()) return -1;
         try {
             return Long.parseLong(contentRange.substring(slash + 1).trim());
+        } catch (final NumberFormatException ignored) {
+            return -1;
+        }
+    }
+
+    private static long contentRangeEnd(final String contentRange) {
+        if (contentRange == null) return -1;
+        final int dash = contentRange.indexOf('-');
+        final int slash = contentRange.indexOf('/');
+        if (dash < 0 || slash <= dash + 1) return -1;
+        try {
+            return Long.parseLong(contentRange.substring(dash + 1, slash).trim());
+        } catch (final NumberFormatException ignored) {
+            return -1;
+        }
+    }
+
+    private static long contentRangeTotal(final String contentRange) {
+        if (contentRange == null) return -1;
+        final int slash = contentRange.indexOf('/');
+        if (slash < 0 || slash + 1 >= contentRange.length()) return -1;
+        final String value = contentRange.substring(slash + 1).trim();
+        if ("*".equals(value)) return -1;
+        try {
+            return Long.parseLong(value);
         } catch (final NumberFormatException ignored) {
             return -1;
         }
