@@ -324,6 +324,7 @@ public class DownloadService extends Service {
     private static final List<Task> TASKS = Collections.synchronizedList(new ArrayList<>());
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
+    private static final AtomicBoolean PAUSE_AFTER_CURRENT = new AtomicBoolean(false);
 
     // ---------------------------------------------------------------- persistence
 
@@ -469,6 +470,38 @@ public class DownloadService extends Service {
 
     private static boolean eq(final String a, final String b) {
         return a == null ? b == null : a.equals(b);
+    }
+
+    public static boolean pauseAfterCurrent(final Context context) {
+        boolean active = false;
+        for (final Task task : snapshot()) {
+            if (task.state.active()) {
+                active = true;
+                break;
+            }
+        }
+        if (!active) {
+            boolean changed = false;
+            for (final Task task : snapshot()) {
+                if (task.state == State.QUEUED) {
+                    task.pauseRequested = true;
+                    task.state = State.PAUSED;
+                    changed = true;
+                }
+            }
+            if (changed) save(context);
+            return changed;
+        }
+        PAUSE_AFTER_CURRENT.set(true);
+        return true;
+    }
+
+    public static boolean isPauseAfterCurrentPending() {
+        return PAUSE_AFTER_CURRENT.get();
+    }
+
+    public static void cancelPauseAfterCurrent() {
+        PAUSE_AFTER_CURRENT.set(false);
     }
 
     public static boolean moveUp(final Context context, final Task task) {
@@ -679,11 +712,25 @@ public class DownloadService extends Service {
             Task task;
             while ((task = nextQueued()) != null) {
                 process(task);
+                if (PAUSE_AFTER_CURRENT.getAndSet(false)) {
+                    pauseQueuedTasks();
+                    break;
+                }
             }
         } finally {
             RUNNING.set(false);
             finish();
         }
+    }
+
+    private void pauseQueuedTasks() {
+        for (final Task task : snapshot()) {
+            if (task.state == State.QUEUED) {
+                task.pauseRequested = true;
+                task.state = State.PAUSED;
+            }
+        }
+        save(this);
     }
 
     private Task nextQueued() {
