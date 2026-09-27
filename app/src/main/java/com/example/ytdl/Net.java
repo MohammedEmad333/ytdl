@@ -216,6 +216,22 @@ public final class Net {
                             throw new IOException("empty response body");
                         }
 
+                        if (code == 206) {
+                            final String contentRange = response.header("Content-Range");
+                            final long rangeStart = contentRangeStart(contentRange);
+                            final long rangeEnd = contentRangeEnd(contentRange);
+                            if (rangeStart >= 0 && rangeEnd >= rangeStart
+                                    && body.contentLength() >= 0) {
+                                final long declaredBytes = rangeEnd - rangeStart + 1;
+                                if (body.contentLength() != declaredBytes) {
+                                    throw new UnsafeResume("206 body length "
+                                            + body.contentLength()
+                                            + " does not match Content-Range length "
+                                            + declaredBytes);
+                                }
+                            }
+                        }
+
                         if (total < 0) {
                             total = totalLength(response.header("Content-Range"),
                                     body.contentLength(), written);
