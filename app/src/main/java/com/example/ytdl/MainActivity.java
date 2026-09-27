@@ -460,6 +460,30 @@ public class MainActivity extends Activity {
         actions.addView(smallButton(this, "Cancel all", Ui.MUTED, v -> BatchControls.cancelAll(this)));
         root.addView(actions);
 
+        final Button pauseAfterCurrent = new Button(this);
+        pauseAfterCurrent.setText("PAUSE AFTER CURRENT");
+        pauseAfterCurrent.setAllCaps(false);
+        pauseAfterCurrent.setTextColor(Ui.ACCENT);
+        pauseAfterCurrent.setTextSize(Ui.size(12));
+        pauseAfterCurrent.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        pauseAfterCurrent.setStateListAnimator(null);
+        pauseAfterCurrent.setBackground(Ui.box(this, Color.TRANSPARENT, Ui.LINE, 6));
+        pauseAfterCurrent.setOnClickListener(v -> {
+            if (DownloadService.isPauseAfterCurrentPending()) {
+                DownloadService.cancelPauseAfterCurrent();
+                Toast.makeText(this, "Pause-after-current cancelled", Toast.LENGTH_SHORT).show();
+            } else {
+                final boolean armed = DownloadService.pauseAfterCurrent(this);
+                Toast.makeText(this, armed ? "Queue will pause after the current download"
+                        : "No queued downloads", Toast.LENGTH_SHORT).show();
+            }
+            refreshQueue();
+        });
+        final LinearLayout.LayoutParams pauseAfterParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 38));
+        pauseAfterParams.topMargin = Ui.dp(this, 8);
+        root.addView(pauseAfterCurrent, pauseAfterParams);
+
         final Button retryFailed = new Button(this);
         retryFailed.setText("RETRY FAILED");
         retryFailed.setAllCaps(false);
@@ -1324,6 +1348,8 @@ public class MainActivity extends Activity {
             final boolean waitingForWifi = DownloadService.wifiOnly(this)
                     && waiting > 0 && !DownloadService.isWifiConnectedForUi(this);
             queueSummary.setText((waitingForWifi ? "Waiting for Wi-Fi · " : "")
+                    + (DownloadService.isPauseAfterCurrentPending()
+                    ? "Pause after current armed · " : "")
                     + active + " active · " + waiting + " waiting · "
                     + failed + " failed · " + saved + " saved");
         }
