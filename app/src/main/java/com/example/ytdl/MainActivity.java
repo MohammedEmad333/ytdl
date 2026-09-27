@@ -97,6 +97,7 @@ public class MainActivity extends Activity {
     private QueueAdapter queueAdapter;
     private Spinner queueFilterSpinner;
     private Spinner queueSortSpinner;
+    private TextView queueSummary;
     private ArrayAdapter<String> audioAdapter;
 
     private String pageUrl = "";
@@ -419,6 +420,10 @@ public class MainActivity extends Activity {
         final LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(pad, Ui.dp(this, 12), pad, Ui.dp(this, 12));
+
+        queueSummary = Ui.mono(this, 12, Ui.MUTED);
+        queueSummary.setPadding(0, 0, 0, Ui.dp(this, 10));
+        root.addView(queueSummary);
 
         queueFilterSpinner = compactSpinner(new String[]{
                 "All downloads", "Active", "Queued / paused", "Finished", "Failed"
@@ -1287,8 +1292,27 @@ public class MainActivity extends Activity {
     private void refreshQueue() {
         final List<DownloadService.Task> all = DownloadService.snapshot();
         int remaining = 0;
+        int active = 0;
+        int waiting = 0;
+        int failed = 0;
+        int saved = 0;
         for (final DownloadService.Task task : all) {
             if (!task.state.finished()) remaining++;
+            if (task.state.active()) {
+                active++;
+            } else if (task.state == DownloadService.State.QUEUED
+                    || task.state == DownloadService.State.PAUSED) {
+                waiting++;
+            } else if (task.state == DownloadService.State.FAILED) {
+                failed++;
+            } else if (task.state == DownloadService.State.DONE) {
+                saved++;
+            }
+        }
+
+        if (queueSummary != null) {
+            queueSummary.setText(active + " active · " + waiting + " waiting · "
+                    + failed + " failed · " + saved + " saved");
         }
 
         final int filter = queueFilterSpinner == null ? 0
