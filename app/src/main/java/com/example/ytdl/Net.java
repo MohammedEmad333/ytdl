@@ -216,11 +216,19 @@ public final class Net {
                             }
                         }
 
+                        final long requestedEnd = requestStart + CHUNK_BYTES - 1;
+                        final long maxChunkBytes = requestedEnd - requestStart + 1;
+                        long responseBytes = 0;
                         try (InputStream in = body.byteStream()) {
                             final byte[] buffer = new byte[64 * 1024];
                             int read;
                             while ((read = in.read(buffer)) > 0) {
                                 control.checkpoint();
+                                responseBytes += read;
+                                if (code == 206 && responseBytes > maxChunkBytes) {
+                                    throw new UnsafeResume("server returned more bytes than requested"
+                                            + " for range starting at " + requestStart);
+                                }
                                 out.write(buffer, 0, read);
                                 written += read;
                                 progress.onProgress(written, total);
