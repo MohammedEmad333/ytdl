@@ -10,6 +10,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import android.os.StatFs;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -36,6 +37,7 @@ public final class Net {
      */
     private static final long CHUNK_BYTES = 4L * 1024 * 1024;
     private static final int CHUNK_RETRIES = 3;
+    private static final long STORAGE_RESERVE_BYTES = 32L * 1024 * 1024;
 
     public static final OkHttpClient HTTP = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -113,6 +115,7 @@ public final class Net {
 
         long written = dest.exists() ? dest.length() : 0;
         long total = -1;
+        ensureWritableSpace(dest, CHUNK_BYTES);
 
         // Append, never truncate — the existing bytes are the resume point.
         try (OutputStream out = new FileOutputStream(dest, true)) {
@@ -120,6 +123,7 @@ public final class Net {
                 control.checkpoint();
 
                 final long chunkStart = written;
+                ensureWritableSpace(dest, CHUNK_BYTES);
                 int attempt = 0;
                 while (true) {
                     control.checkpoint();
@@ -198,6 +202,19 @@ public final class Net {
                     throw new IOException("stalled at " + written + " bytes");
                 }
             }
+        }
+    }
+
+    private static void ensureWritableSpace(final File dest, final long upcomingBytes)
+            throws IOException {
+        final File parent = dest.getParentFile();
+        if (parent == null) return;
+        final StatFs stat = new StatFs(parent.getAbsolutePath());
+        final long available = stat.getAvailableBytes();
+        final long required = Math.max(CHUNK_BYTES, upcomingBytes) + STORAGE_RESERVE_BYTES;
+        if (available < required) {
+            throw new IOException("not enough storage space (need about "
+                    + required / (1024 * 1024) + " MB free)");
         }
     }
 
