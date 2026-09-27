@@ -445,6 +445,23 @@ public class DownloadService extends Service {
         return move(context, task, 1);
     }
 
+    public static boolean moveToTop(final Context context, final Task task) {
+        if (task == null || task.state.active() || task.state.finished()) return false;
+        synchronized (TASKS) {
+            final int from = TASKS.indexOf(task);
+            if (from <= 0) return false;
+            int to = 0;
+            while (to < from && TASKS.get(to).state.active()) {
+                to++;
+            }
+            if (to >= from) return false;
+            TASKS.remove(from);
+            TASKS.add(to, task);
+        }
+        save(context);
+        return true;
+    }
+
     private static boolean move(final Context context, final Task task, final int delta) {
         if (task == null || task.state.active() || task.state.finished()) return false;
         synchronized (TASKS) {
