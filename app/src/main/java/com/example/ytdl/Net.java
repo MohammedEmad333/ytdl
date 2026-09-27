@@ -76,6 +76,13 @@ public final class Net {
         }
     }
 
+    /** A resumed response that cannot be safely appended to the existing partial file. */
+    private static final class UnsafeResume extends IOException {
+        UnsafeResume(final String message) {
+            super(message);
+        }
+    }
+
     /** Thrown to unwind a transfer for good. Partial files are discarded. */
     public static final class Cancelled extends IOException {
         public Cancelled() {
@@ -160,6 +167,21 @@ public final class Net {
                             throw new IOException("HTTP " + code);
                         }
 
+                        // Once a partial exists, appending is only safe when the server
+                        // explicitly honors the requested offset with a matching 206 range.
+                        if (requestStart > 0) {
+                            if (code != 206) {
+                                throw new UnsafeResume("server ignored resume range at "
+                                        + requestStart + " bytes");
+                            }
+                            final long contentRangeStart =
+                                    contentRangeStart(response.header("Content-Range"));
+                            if (contentRangeStart != requestStart) {
+                                throw new UnsafeResume("resume range mismatch (requested "
+                                        + requestStart + ", got " + contentRangeStart + ")");
+                            }
+                        }
+
                         final ResponseBody body = response.body();
                         if (body == null) {
                             throw new IOException("empty response body");
@@ -194,6 +216,8 @@ public final class Net {
                         }
                         break;
                     } catch (final Paused | Cancelled | NetworkBlocked e) {
+                        throw e;
+                    } catch (final UnsafeResume e) {
                         throw e;
                     } catch (final IOException e) {
                         if (isStale(e) || attempt >= CHUNK_RETRIES) {
@@ -234,14 +258,28 @@ public final class Net {
             throws Paused, Cancelled, NetworkBlocked {
         final long delayMs = 500L * (1L << Math.min(attempt - 1, 2));
         final long until = System.currentTimeMillis() + delayMs;
-        while (System.currentTimeMillis() < until) {
+        while (true) {
             control.checkpoint();
+            final long remaining = until - System.currentTimeMillis();
+            if (remaining <= 0) break;
             try {
-                Thread.sleep(Math.min(200L, until - System.currentTimeMillis()));
+                Thread.sleep(Math.min(200L, remaining));
             } catch (final InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
             }
+        }
+    }
+
+    private static long contentRangeStart(final String contentRange) {
+        if (contentRange == null) return -1;
+        final int space = contentRange.indexOf(' ');
+        final int dash = contentRange.indexOf('-');
+        if (space < 0 || dash <= space + 1) return -1;
+        try {
+            return Long.parseLong(contentRange.substring(space + 1, dash).trim());
+        } catch (final NumberFormatException ignored) {
+            return -1;
         }
     }
 
