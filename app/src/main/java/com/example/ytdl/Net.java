@@ -152,11 +152,28 @@ public final class Net {
                     try (okhttp3.Response response = HTTP.newCall(request).execute()) {
                         final int code = response.code();
 
-                        // 416 means we asked to start past the end. On a resume that's just the
-                        // file already being complete — which is how a finished stage reports
-                        // itself when a paused task gets re-run from the top.
+                        // A 416 can mean the partial is already complete, but only if the
+                        // server's reported total agrees with what we have. Treating every
+                        // non-empty partial as complete can silently accept a truncated file.
                         if (code == 416 && written > 0) {
-                            return;
+                            final long reportedTotal =
+                                    unsatisfiedRangeTotal(response.header("Content-Range"));
+                            if (reportedTotal > 0 && written == reportedTotal) {
+                                if (expectedTotal > 0 && reportedTotal != expectedTotal) {
+                                    throw new IOException("stream length changed on resume ("
+                                            + expectedTotal + " -> " + reportedTotal + " bytes)");
+                                }
+                                progress.onProgress(written, reportedTotal);
+                                return;
+                            }
+                            if (expectedTotal > 0 && written == expectedTotal) {
+                                progress.onProgress(written, expectedTotal);
+                                return;
+                            }
+                            throw new UnsafeResume("HTTP 416 before partial was confirmed complete"
+                                    + " (have " + written + " bytes"
+                                    + (reportedTotal > 0 ? ", server says " + reportedTotal : "")
+                                    + ")");
                         }
                         if (code != 200 && code != 206) {
                             if (isTransientHttp(code) && attempt < CHUNK_RETRIES) {
@@ -268,6 +285,18 @@ public final class Net {
                 Thread.currentThread().interrupt();
                 return;
             }
+        }
+    }
+
+    private static long unsatisfiedRangeTotal(final String contentRange) {
+        // Unsatisfied ranges are reported as "bytes */52428800".
+        if (contentRange == null) return -1;
+        final int slash = contentRange.indexOf('/');
+        if (slash < 0 || slash + 1 >= contentRange.length()) return -1;
+        try {
+            return Long.parseLong(contentRange.substring(slash + 1).trim());
+        } catch (final NumberFormatException ignored) {
+            return -1;
         }
     }
 
