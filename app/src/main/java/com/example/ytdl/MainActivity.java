@@ -261,6 +261,20 @@ public class MainActivity extends Activity {
         urlInput.setPadding(Ui.dp(this, 14), Ui.dp(this, 12), Ui.dp(this, 14), Ui.dp(this, 12));
         root.addView(urlInput);
 
+        final Button paste = new Button(this);
+        paste.setText("PASTE FROM CLIPBOARD");
+        paste.setAllCaps(false);
+        paste.setTextColor(Ui.MUTED);
+        paste.setTextSize(Ui.size(12));
+        paste.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        paste.setStateListAnimator(null);
+        paste.setBackground(Ui.box(this, Color.TRANSPARENT, Ui.LINE, 6));
+        paste.setOnClickListener(v -> pasteFromClipboard());
+        final LinearLayout.LayoutParams pasteParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 38));
+        pasteParams.topMargin = Ui.dp(this, 8);
+        root.addView(paste, pasteParams);
+
         searchSourceSpinner = new Spinner(this);
         final ArrayAdapter<String> searchSourceAdapter = new ArrayAdapter<String>(
                 this, android.R.layout.simple_spinner_item,
@@ -373,6 +387,27 @@ public class MainActivity extends Activity {
         lp.topMargin = Ui.dp(this, 12);
         root.addView(list, lp);
         return root;
+    }
+
+    private void pasteFromClipboard() {
+        final android.content.ClipboardManager clipboard =
+                getSystemService(android.content.ClipboardManager.class);
+        if (clipboard == null || !clipboard.hasPrimaryClip()
+                || clipboard.getPrimaryClip() == null
+                || clipboard.getPrimaryClip().getItemCount() == 0) {
+            Toast.makeText(this, "Clipboard is empty", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        final CharSequence text = clipboard.getPrimaryClip().getItemAt(0).coerceToText(this);
+        if (text == null || text.toString().trim().isEmpty()) {
+            Toast.makeText(this, "Clipboard has no text", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        final String value = text.toString().trim();
+        urlInput.setText(value);
+        urlInput.setSelection(value.length());
     }
 
     private AdapterView.OnItemSelectedListener queueRefreshListener() {
