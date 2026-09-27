@@ -24,6 +24,7 @@ import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -424,6 +425,15 @@ public class MainActivity extends Activity {
         queueSummary = Ui.mono(this, 12, Ui.MUTED);
         queueSummary.setPadding(0, 0, 0, Ui.dp(this, 10));
         root.addView(queueSummary);
+
+        final CheckBox wifiOnly = new CheckBox(this);
+        wifiOnly.setText("Wi-Fi only downloads");
+        wifiOnly.setTextColor(Ui.TEXT);
+        wifiOnly.setTypeface(Typeface.MONOSPACE);
+        wifiOnly.setChecked(DownloadService.wifiOnly(this));
+        wifiOnly.setOnCheckedChangeListener((button, checked) ->
+                DownloadService.setWifiOnly(this, checked));
+        root.addView(wifiOnly);
 
         queueFilterSpinner = compactSpinner(new String[]{
                 "All downloads", "Active", "Queued / paused", "Finished", "Failed"
