@@ -1272,8 +1272,9 @@ public class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(0, Ui.dp(this, 10), 0, 0);
         row.addView(smallButton(this, "Open", Ui.OK, v -> openSaved(task)));
-        row.addView(smallButton(this, "Share", Ui.ACCENT, v -> shareSaved(task)));
+        row.addView(smallButton(this, "Share file", Ui.ACCENT, v -> shareSaved(task)));
         row.addView(smallButton(this, "Copy link", Ui.MUTED, v -> copySourceLink(task)));
+        row.addView(smallButton(this, "Share source", Ui.MUTED, v -> shareSourceLink(task)));
         return row;
     }
 
@@ -1312,6 +1313,17 @@ public class MainActivity extends Activity {
         clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
                 "Source link", task.pageUrl));
         Toast.makeText(this, "Source link copied", Toast.LENGTH_SHORT).show();
+    }
+
+    private void shareSourceLink(final DownloadService.Task task) {
+        try {
+            final Intent intent = new Intent(Intent.ACTION_SEND)
+                    .setType("text/plain")
+                    .putExtra(Intent.EXTRA_TEXT, task.pageUrl);
+            startActivity(Intent.createChooser(intent, "Share source link"));
+        } catch (final Exception e) {
+            Toast.makeText(this, "Couldn't share source link", Toast.LENGTH_SHORT).show();
+        }
     }
 
     private View smallButton(final Context c, final String text, final int color,
