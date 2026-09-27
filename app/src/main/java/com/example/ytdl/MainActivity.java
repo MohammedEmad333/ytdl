@@ -642,9 +642,9 @@ public class MainActivity extends Activity {
 
         final int sort = searchSortSpinner == null ? 0 : searchSortSpinner.getSelectedItemPosition();
         if (sort == 1) {
-            visible.sort((a, b) -> Long.compare(sortDuration(a.duration), sortDuration(b.duration)));
+            visible.sort((a, b) -> compareDuration(a.duration, b.duration, false));
         } else if (sort == 2) {
-            visible.sort((a, b) -> Long.compare(sortDuration(b.duration), sortDuration(a.duration)));
+            visible.sort((a, b) -> compareDuration(a.duration, b.duration, true));
         }
 
         status.setText(visible.isEmpty()
@@ -672,8 +672,12 @@ public class MainActivity extends Activity {
         return duration > 20 * 60;
     }
 
-    private static long sortDuration(final long duration) {
-        return duration <= 0 ? Long.MAX_VALUE : duration;
+    private static int compareDuration(final long a, final long b, final boolean descending) {
+        final boolean unknownA = a <= 0;
+        final boolean unknownB = b <= 0;
+        if (unknownA != unknownB) return unknownA ? 1 : -1;
+        if (unknownA) return 0;
+        return descending ? Long.compare(b, a) : Long.compare(a, b);
     }
 
     private static void appendUniqueSearchResults(final List<MediaSearch.Result> target,
