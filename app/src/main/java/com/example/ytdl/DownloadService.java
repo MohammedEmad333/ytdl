@@ -158,6 +158,7 @@ public class DownloadService extends Service {
         AUDIO("Audio"),
         MERGING("Merging"),
         ENCODING("Encoding"),
+        CONVERTING("Converting"),
         SAVING("Saving"),
         PAUSED("Paused"),
         DONE("Saved"),
@@ -177,7 +178,8 @@ public class DownloadService extends Service {
         /** A worker thread is inside this task right now. */
         public boolean active() {
             return this == RESOLVING || this == VIDEO || this == AUDIO
-                    || this == MERGING || this == ENCODING || this == SAVING;
+                    || this == MERGING || this == ENCODING || this == CONVERTING
+                    || this == SAVING;
         }
 
         /** Transferring bytes, so a byte count and a rate mean something. */
@@ -831,6 +833,9 @@ public class DownloadService extends Service {
         if (task.spec.kind == Kind.MP3) {
             control.checkpoint();
             encodeMp3(task, video, control);
+        } else if (task.spec.kind == Kind.SUBTITLE) {
+            control.checkpoint();
+            convertSubtitleToSrt(task, video, control);
         } else if (task.audioUrl != null) {
             stage(task, State.AUDIO);
             Net.fetchToFile(task.audioUrl, audio, task.expectedAudioBytes, (done, total) -> {
@@ -883,6 +888,10 @@ public class DownloadService extends Service {
         return new File(c.getCacheDir(), "e-" + t.id + ".mp3");
     }
 
+    private static File subtitleTemp(final Context c, final Task t) {
+        return new File(c.getCacheDir(), "s-" + t.id + ".srt");
+    }
+
     private static File coverTemp(final Context c, final Task t) {
         return new File(c.getCacheDir(), "c-" + t.id + ".jpg");
     }
@@ -892,7 +901,36 @@ public class DownloadService extends Service {
         audioTemp(c, t).delete();
         mergedTemp(c, t).delete();
         mp3Temp(c, t).delete();
+        subtitleTemp(c, t).delete();
         coverTemp(c, t).delete();
+    }
+
+    private void convertSubtitleToSrt(final Task task, final File source,
+                                      final Net.Control control) throws Exception {
+        final File output = subtitleTemp(this, task);
+        control.checkpoint();
+        task.state = State.CONVERTING;
+        task.done = 0;
+        task.total = -1;
+        update(task);
+        save(this);
+
+        final String command = "-y -i " + q(source.getAbsolutePath()) + " "
+                + q(output.getAbsolutePath());
+        final FFmpegSession session = FFmpegKit.execute(command);
+        if (!ReturnCode.isSuccess(session.getReturnCode()) || !output.exists()
+                || output.length() == 0) {
+            throw new IOException("subtitle conversion to SRT failed");
+        }
+
+        control.checkpoint();
+        task.state = State.SAVING;
+        update(task);
+        final String language = task.spec.subtitleTag == null || task.spec.subtitleTag.isEmpty()
+                ? "subtitles" : task.spec.subtitleTag;
+        task.extension = language + ".srt";
+        task.mimeType = "application/x-subrip";
+        task.outputUri = publish(output, task.title + "." + task.extension, task.mimeType).toString();
     }
 
     private void encodeMp3(final Task task, final File source, final Net.Control control)
