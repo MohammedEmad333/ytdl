@@ -69,6 +69,13 @@ public final class Net {
         }
     }
 
+    /** Thrown when Wi-Fi-only mode is enabled and Wi-Fi is unavailable. */
+    public static final class NetworkBlocked extends IOException {
+        public NetworkBlocked() {
+            super("waiting for Wi-Fi");
+        }
+    }
+
     /** Thrown to unwind a transfer for good. Partial files are discarded. */
     public static final class Cancelled extends IOException {
         public Cancelled() {
@@ -83,7 +90,7 @@ public final class Net {
 
     /** Checked between chunks and between buffer reads. Throws to stop. */
     public interface Control {
-        void checkpoint() throws Paused, Cancelled;
+        void checkpoint() throws Paused, Cancelled, NetworkBlocked;
     }
 
     /**
@@ -186,7 +193,7 @@ public final class Net {
                             return;
                         }
                         break;
-                    } catch (final Paused | Cancelled e) {
+                    } catch (final Paused | Cancelled | NetworkBlocked e) {
                         throw e;
                     } catch (final IOException e) {
                         if (isStale(e) || attempt >= CHUNK_RETRIES) {
@@ -224,7 +231,7 @@ public final class Net {
     }
 
     private static void retryDelay(final Control control, final int attempt)
-            throws Paused, Cancelled {
+            throws Paused, Cancelled, NetworkBlocked {
         final long delayMs = 500L * (1L << Math.min(attempt - 1, 2));
         final long until = System.currentTimeMillis() + delayMs;
         while (System.currentTimeMillis() < until) {
