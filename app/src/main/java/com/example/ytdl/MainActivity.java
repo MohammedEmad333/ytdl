@@ -1321,7 +1321,10 @@ public class MainActivity extends Activity {
         }
 
         if (queueSummary != null) {
-            queueSummary.setText(active + " active · " + waiting + " waiting · "
+            final boolean waitingForWifi = DownloadService.wifiOnly(this)
+                    && waiting > 0 && !DownloadService.isWifiConnectedForUi(this);
+            queueSummary.setText((waitingForWifi ? "Waiting for Wi-Fi · " : "")
+                    + active + " active · " + waiting + " waiting · "
                     + failed + " failed · " + saved + " saved");
         }
 
