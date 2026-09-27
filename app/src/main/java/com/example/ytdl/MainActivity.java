@@ -1273,6 +1273,7 @@ public class MainActivity extends Activity {
         row.setPadding(0, Ui.dp(this, 10), 0, 0);
         row.addView(smallButton(this, "Open", Ui.OK, v -> openSaved(task)));
         row.addView(smallButton(this, "Share", Ui.ACCENT, v -> shareSaved(task)));
+        row.addView(smallButton(this, "Copy link", Ui.MUTED, v -> copySourceLink(task)));
         return row;
     }
 
@@ -1299,6 +1300,18 @@ public class MainActivity extends Activity {
         } catch (final Exception e) {
             Toast.makeText(this, "Couldn't share this file", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void copySourceLink(final DownloadService.Task task) {
+        final android.content.ClipboardManager clipboard =
+                getSystemService(android.content.ClipboardManager.class);
+        if (clipboard == null) {
+            Toast.makeText(this, "Clipboard unavailable", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
+                "Source link", task.pageUrl));
+        Toast.makeText(this, "Source link copied", Toast.LENGTH_SHORT).show();
     }
 
     private View smallButton(final Context c, final String text, final int color,
