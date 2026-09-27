@@ -35,6 +35,7 @@ public final class Net {
      * partial file's length costs nothing extra.
      */
     private static final long CHUNK_BYTES = 4L * 1024 * 1024;
+    private static final int CHUNK_RETRIES = 3;
 
     public static final OkHttpClient HTTP = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -119,58 +120,76 @@ public final class Net {
                 control.checkpoint();
 
                 final long chunkStart = written;
+                int attempt = 0;
+                while (true) {
+                    control.checkpoint();
+                    final long requestStart = written;
+                    final okhttp3.Request request = new okhttp3.Request.Builder()
+                            .url(url)
+                            .addHeader("User-Agent", USER_AGENT)
+                            .addHeader("Range", "bytes=" + requestStart + "-"
+                                    + (requestStart + CHUNK_BYTES - 1))
+                            .build();
 
-                final okhttp3.Request request = new okhttp3.Request.Builder()
-                        .url(url)
-                        .addHeader("User-Agent", USER_AGENT)
-                        .addHeader("Range", "bytes=" + chunkStart + "-"
-                                + (chunkStart + CHUNK_BYTES - 1))
-                        .build();
+                    try (okhttp3.Response response = HTTP.newCall(request).execute()) {
+                        final int code = response.code();
 
-                try (okhttp3.Response response = HTTP.newCall(request).execute()) {
-                    final int code = response.code();
-
-                    // 416 means we asked to start past the end. On a resume that's just the
-                    // file already being complete — which is how a finished stage reports
-                    // itself when a paused task gets re-run from the top.
-                    if (code == 416 && written > 0) {
-                        return;
-                    }
-                    if (code != 200 && code != 206) {
-                        throw new IOException("HTTP " + code);
-                    }
-
-                    final ResponseBody body = response.body();
-                    if (body == null) {
-                        throw new IOException("empty response body");
-                    }
-
-                    if (total < 0) {
-                        total = totalLength(response.header("Content-Range"),
-                                body.contentLength(), written);
-
-                        // A re-derived URL that reports a different length isn't the stream
-                        // we already have bytes from. Appending would corrupt silently.
-                        if (expectedTotal > 0 && total > 0 && total != expectedTotal) {
-                            throw new IOException("stream changed since it was queued ("
-                                    + expectedTotal + " -> " + total + " bytes)");
+                        // 416 means we asked to start past the end. On a resume that's just the
+                        // file already being complete — which is how a finished stage reports
+                        // itself when a paused task gets re-run from the top.
+                        if (code == 416 && written > 0) {
+                            return;
                         }
-                    }
-
-                    try (InputStream in = body.byteStream()) {
-                        final byte[] buffer = new byte[64 * 1024];
-                        int read;
-                        while ((read = in.read(buffer)) > 0) {
-                            control.checkpoint();
-                            out.write(buffer, 0, read);
-                            written += read;
-                            progress.onProgress(written, total);
+                        if (code != 200 && code != 206) {
+                            if (isTransientHttp(code) && attempt < CHUNK_RETRIES) {
+                                attempt++;
+                                retryDelay(control, attempt);
+                                continue;
+                            }
+                            throw new IOException("HTTP " + code);
                         }
-                    }
 
-                    // 200 rather than 206 means the server ignored Range and sent the lot.
-                    if (code == 200) {
+                        final ResponseBody body = response.body();
+                        if (body == null) {
+                            throw new IOException("empty response body");
+                        }
+
+                        if (total < 0) {
+                            total = totalLength(response.header("Content-Range"),
+                                    body.contentLength(), written);
+
+                            // A re-derived URL that reports a different length isn't the stream
+                            // we already have bytes from. Appending would corrupt silently.
+                            if (expectedTotal > 0 && total > 0 && total != expectedTotal) {
+                                throw new IOException("stream changed since it was queued ("
+                                        + expectedTotal + " -> " + total + " bytes)");
+                            }
+                        }
+
+                        try (InputStream in = body.byteStream()) {
+                            final byte[] buffer = new byte[64 * 1024];
+                            int read;
+                            while ((read = in.read(buffer)) > 0) {
+                                control.checkpoint();
+                                out.write(buffer, 0, read);
+                                written += read;
+                                progress.onProgress(written, total);
+                            }
+                        }
+
+                        // 200 rather than 206 means the server ignored Range and sent the lot.
+                        if (code == 200) {
+                            return;
+                        }
                         break;
+                    } catch (final Paused | Cancelled e) {
+                        throw e;
+                    } catch (final IOException e) {
+                        if (isStale(e) || attempt >= CHUNK_RETRIES) {
+                            throw e;
+                        }
+                        attempt++;
+                        retryDelay(control, attempt);
                     }
                 }
 
@@ -178,6 +197,26 @@ public final class Net {
                 if (written == chunkStart) {
                     throw new IOException("stalled at " + written + " bytes");
                 }
+            }
+        }
+    }
+
+    private static boolean isTransientHttp(final int code) {
+        return code == 408 || code == 425 || code == 500 || code == 502
+                || code == 503 || code == 504;
+    }
+
+    private static void retryDelay(final Control control, final int attempt)
+            throws Paused, Cancelled {
+        final long delayMs = 500L * (1L << Math.min(attempt - 1, 2));
+        final long until = System.currentTimeMillis() + delayMs;
+        while (System.currentTimeMillis() < until) {
+            control.checkpoint();
+            try {
+                Thread.sleep(Math.min(200L, until - System.currentTimeMillis()));
+            } catch (final InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
             }
         }
     }
