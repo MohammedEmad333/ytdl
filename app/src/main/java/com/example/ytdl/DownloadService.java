@@ -15,6 +15,9 @@ import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
 import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.SystemClock;
@@ -68,6 +71,8 @@ public class DownloadService extends Service {
     public static final String ACTION_PAUSE = "pause";
     public static final String ACTION_RESUME = "resume";
     public static final String ACTION_CANCEL = "cancel";
+    private static final String PREFS = "downloader_prefs";
+    private static final String PREF_WIFI_ONLY = "wifi_only";
 
     /** What kind of file was asked for. */
     public enum Kind {
@@ -325,6 +330,7 @@ public class DownloadService extends Service {
     private static final String QUEUE_FILE = "queue.json";
     private static final Object IO_LOCK = new Object();
     private static boolean loaded;
+    private ConnectivityManager.NetworkCallback networkCallback;
 
     /**
      * Reads the queue back from disk. Called from both the activity and the service, since
@@ -410,6 +416,28 @@ public class DownloadService extends Service {
             }
         }
         return null;
+    }
+
+    public static boolean wifiOnly(final Context context) {
+        return context.getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getBoolean(PREF_WIFI_ONLY, false);
+    }
+
+    public static void setWifiOnly(final Context context, final boolean enabled) {
+        context.getSharedPreferences(PREFS, MODE_PRIVATE)
+                .edit().putBoolean(PREF_WIFI_ONLY, enabled).apply();
+        if (!enabled || isWifiConnected(context)) {
+            wake(context, null, 0);
+        }
+    }
+
+    private static boolean isWifiConnected(final Context context) {
+        final ConnectivityManager cm = context.getSystemService(ConnectivityManager.class);
+        if (cm == null) return false;
+        final Network network = cm.getActiveNetwork();
+        if (network == null) return false;
+        final NetworkCapabilities caps = cm.getNetworkCapabilities(network);
+        return caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
     }
 
     public static boolean enqueue(final Context context, final Task task) {
@@ -565,6 +593,24 @@ public class DownloadService extends Service {
     public void onCreate() {
         super.onCreate();
         ensureLoaded(this);
+        final ConnectivityManager cm = getSystemService(ConnectivityManager.class);
+        if (cm != null) {
+            networkCallback = new ConnectivityManager.NetworkCallback() {
+                @Override public void onAvailable(final Network network) {
+                    if (!wifiOnly(DownloadService.this) || isWifiConnected(DownloadService.this)) {
+                        wake(DownloadService.this, null, 0);
+                    }
+                }
+                @Override public void onCapabilitiesChanged(final Network network,
+                                                            final NetworkCapabilities caps) {
+                    if (wifiOnly(DownloadService.this)
+                            && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                        wake(DownloadService.this, null, 0);
+                    }
+                }
+            };
+            cm.registerDefaultNetworkCallback(networkCallback);
+        }
         final NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID, "Downloads", NotificationManager.IMPORTANCE_LOW);
         channel.setShowBadge(false);
@@ -599,6 +645,15 @@ public class DownloadService extends Service {
     }
 
     @Override
+    public void onDestroy() {
+        final ConnectivityManager cm = getSystemService(ConnectivityManager.class);
+        if (cm != null && networkCallback != null) {
+            try { cm.unregisterNetworkCallback(networkCallback); } catch (final Exception ignored) {}
+        }
+        super.onDestroy();
+    }
+
+    @Override
     public IBinder onBind(final Intent intent) {
         return null;
     }
@@ -628,6 +683,9 @@ public class DownloadService extends Service {
     }
 
     private Task nextQueued() {
+        if (wifiOnly(this) && !isWifiConnected(this)) {
+            return null;
+        }
         synchronized (TASKS) {
             for (final Task t : TASKS) {
                 if (t.state == State.QUEUED && !t.cancelled && !t.pauseRequested) {
@@ -674,6 +732,9 @@ public class DownloadService extends Service {
 
     private void process(final Task task) {
         final Net.Control control = () -> {
+            if (wifiOnly(this) && !isWifiConnected(this)) {
+                throw new Net.NetworkBlocked();
+            }
             if (task.cancelled) {
                 throw new Net.Cancelled();
             }
@@ -703,6 +764,8 @@ public class DownloadService extends Service {
             }
 
             task.state = State.DONE;
+        } catch (final Net.NetworkBlocked e) {
+            task.state = State.QUEUED;
         } catch (final Net.Paused e) {
             task.state = State.PAUSED;
         } catch (final Net.Cancelled e) {
@@ -712,7 +775,7 @@ public class DownloadService extends Service {
             task.error = e.getMessage() == null ? e.toString() : e.getMessage();
         } finally {
             // The one case where temp files are kept: they're the resume point.
-            if (task.state != State.PAUSED) {
+            if (task.state != State.PAUSED && task.state != State.QUEUED) {
                 deleteTemps(this, task);
             }
             update(task);
