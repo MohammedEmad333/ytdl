@@ -1195,6 +1195,9 @@ public class MainActivity extends Activity {
         row.setPadding(0, Ui.dp(this, 10), 0, 0);
         final boolean paused = task.state == DownloadService.State.PAUSED;
         if (task.state == DownloadService.State.QUEUED || paused) {
+            row.addView(smallButton(this, "Top", Ui.MUTED, v -> {
+                DownloadService.moveToTop(this, task); refreshQueue();
+            }));
             row.addView(smallButton(this, "Up", Ui.MUTED, v -> {
                 DownloadService.moveUp(this, task); refreshQueue();
             }));
