@@ -67,6 +67,7 @@ public class DownloadService extends Service {
     public static final String EXTRA_TASK_ID = "taskId";
     public static final String ACTION_PAUSE = "pause";
     public static final String ACTION_RESUME = "resume";
+    public static final String ACTION_CANCEL = "cancel";
 
     /** What kind of file was asked for. */
     public enum Kind {
@@ -560,8 +561,11 @@ public class DownloadService extends Service {
         if (intent != null && intent.hasExtra(EXTRA_ACTION)) {
             final Task task = byId(intent.getLongExtra(EXTRA_TASK_ID, -1));
             if (task != null) {
-                if (ACTION_PAUSE.equals(intent.getStringExtra(EXTRA_ACTION))) {
+                final String action = intent.getStringExtra(EXTRA_ACTION);
+                if (ACTION_PAUSE.equals(action)) {
                     pause(this, task);
+                } else if (ACTION_CANCEL.equals(action)) {
+                    cancel(this, task);
                 } else {
                     task.pauseRequested = false;
                     task.state = State.QUEUED;
@@ -1064,6 +1068,17 @@ public class DownloadService extends Service {
                             paused ? android.R.drawable.ic_media_play
                                     : android.R.drawable.ic_media_pause),
                     paused ? "Resume" : "Pause", pi).build());
+
+            final Intent cancelIntent = new Intent(this, DownloadService.class)
+                    .putExtra(EXTRA_ACTION, ACTION_CANCEL)
+                    .putExtra(EXTRA_TASK_ID, task.id);
+            final PendingIntent cancelPi = PendingIntent.getService(this,
+                    (int) (task.id ^ 0x5a5a5a5aL), cancelIntent,
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            builder.addAction(new Notification.Action.Builder(
+                    android.graphics.drawable.Icon.createWithResource(this,
+                            android.R.drawable.ic_menu_close_clear_cancel),
+                    "Cancel", cancelPi).build());
         }
 
         return builder.build();
