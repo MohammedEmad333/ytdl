@@ -99,6 +99,7 @@ public class MainActivity extends Activity {
     private Spinner queueSortSpinner;
     private TextView queueSummary;
     private ArrayAdapter<String> audioAdapter;
+    private Button fetchButton;
 
     private String pageUrl = "";
     private String videoTitle = "media";
@@ -327,20 +328,20 @@ public class MainActivity extends Activity {
         recentParams.topMargin = Ui.dp(this, 8);
         root.addView(recent, recentParams);
 
-        final Button fetch = new Button(this);
-        fetch.setText("FETCH / SEARCH");
-        fetch.setTextColor(Ui.BG);
-        fetch.setTextSize(Ui.size(14));
-        fetch.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        fetch.setLetterSpacing(.1f);
-        fetch.setAllCaps(false);
-        fetch.setStateListAnimator(null);
-        fetch.setBackground(Ui.pressable(this, Ui.ACCENT, Color.parseColor("#C8862A"), 6));
-        fetch.setOnClickListener(v -> fetch(urlInput.getText().toString().trim()));
+        fetchButton = new Button(this);
+        fetchButton.setText("FETCH / SEARCH");
+        fetchButton.setTextColor(Ui.BG);
+        fetchButton.setTextSize(Ui.size(14));
+        fetchButton.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        fetchButton.setLetterSpacing(.1f);
+        fetchButton.setAllCaps(false);
+        fetchButton.setStateListAnimator(null);
+        fetchButton.setBackground(Ui.pressable(this, Ui.ACCENT, Color.parseColor("#C8862A"), 6));
+        fetchButton.setOnClickListener(v -> fetch(urlInput.getText().toString().trim()));
         final LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Ui.dp(this, 44));
         fp.topMargin = Ui.dp(this, 10);
-        root.addView(fetch, fp);
+        root.addView(fetchButton, fp);
 
         preview = new ImageView(this);
         preview.setAdjustViewBounds(true);
@@ -606,6 +607,7 @@ public class MainActivity extends Activity {
             return;
         }
         resetFetch();
+        setFetchBusy(true);
         status.setText("Fetching…");
         executor.execute(() -> {
             try {
@@ -666,8 +668,16 @@ public class MainActivity extends Activity {
                 main.post(() -> status.setText("Couldn't read that input: " + safeMessage(e)));
             } finally {
                 fetchInProgress.set(false);
+                main.post(() -> setFetchBusy(false));
             }
         });
+    }
+
+    private void setFetchBusy(final boolean busy) {
+        if (fetchButton == null) return;
+        fetchButton.setEnabled(!busy);
+        fetchButton.setAlpha(busy ? 0.65f : 1f);
+        fetchButton.setText(busy ? "FETCHING…" : "FETCH / SEARCH");
     }
 
     private void resetFetch() {
