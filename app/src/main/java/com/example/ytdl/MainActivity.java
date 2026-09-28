@@ -442,7 +442,7 @@ public class MainActivity extends Activity {
                 final char last = candidate.charAt(candidate.length() - 1);
                 if (last == '.' || last == ',' || last == ';' || last == ':'
                         || last == ')' || last == ']' || last == '}'
-                        || last == '!' || last == '?' || last == '\\'' || last == '"') {
+                        || last == '!' || last == '?' || last == '\'' || last == '"') {
                     candidate = candidate.substring(0, candidate.length() - 1);
                 } else {
                     break;
