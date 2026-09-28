@@ -55,6 +55,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import okhttp3.Request;
 import okhttp3.Response;
@@ -73,6 +74,7 @@ public class MainActivity extends Activity {
             };
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean fetchInProgress = new AtomicBoolean(false);
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<Option> options = new ArrayList<>();
     private final List<AudioStream> audioTracks = new ArrayList<>();
@@ -599,6 +601,10 @@ public class MainActivity extends Activity {
             status.setText("Paste a link or type something to search.");
             return;
         }
+        if (!fetchInProgress.compareAndSet(false, true)) {
+            Toast.makeText(this, "Already fetching", Toast.LENGTH_SHORT).show();
+            return;
+        }
         resetFetch();
         status.setText("Fetching…");
         executor.execute(() -> {
@@ -658,6 +664,8 @@ public class MainActivity extends Activity {
                         service == ServiceList.SoundCloud ? "SoundCloud" : "YouTube"); });
             } catch (final Exception e) {
                 main.post(() -> status.setText("Couldn't read that input: " + safeMessage(e)));
+            } finally {
+                fetchInProgress.set(false);
             }
         });
     }
