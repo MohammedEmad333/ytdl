@@ -264,10 +264,10 @@ public class MainActivity extends Activity {
         final LinearLayout clipboardActions = new LinearLayout(this);
         clipboardActions.setOrientation(LinearLayout.HORIZONTAL);
 
-        final Button paste = smallButton(this, "Paste", Ui.MUTED, v -> pasteFromClipboard());
+        final View paste = smallButton(this, "Paste", Ui.MUTED, v -> pasteFromClipboard());
         clipboardActions.addView(paste);
 
-        final Button pasteFetch = smallButton(this, "Paste & fetch", Ui.ACCENT,
+        final View pasteFetch = smallButton(this, "Paste & fetch", Ui.ACCENT,
                 v -> pasteAndFetchFromClipboard());
         clipboardActions.addView(pasteFetch);
 
