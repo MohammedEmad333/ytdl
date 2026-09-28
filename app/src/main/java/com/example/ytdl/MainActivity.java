@@ -55,14 +55,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import okhttp3.Request;
 import okhttp3.Response;
 
 public class MainActivity extends Activity {
-    private static final Pattern URL_IN_TEXT = Pattern.compile("https?://\\S+");
     private static final int PLAYLIST_CAP = 200;
     private static final String PREFS = "downloader_prefs";
     private static final String RECENTS = "recent_searches";
@@ -152,9 +149,8 @@ public class MainActivity extends Activity {
         if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
         final String text = intent.getStringExtra(Intent.EXTRA_TEXT);
         if (text == null) return;
-        final Matcher matcher = URL_IN_TEXT.matcher(text);
-        if (!matcher.find()) return;
-        final String url = matcher.group().replaceAll("[),.;]+$", "");
+        final String url = LinkParser.firstSupportedMediaLink(text);
+        if (url == null) return;
         urlInput.setText(url);
         selectTab(true);
         fetch(url);
@@ -420,7 +416,7 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "Clipboard has no text", Toast.LENGTH_SHORT).show();
             return;
         }
-        final String link = firstSupportedMediaLink(value);
+        final String link = LinkParser.firstSupportedMediaLink(value);
         if (link == null) {
             Toast.makeText(this, "Clipboard doesn't contain a supported media link",
                     Toast.LENGTH_SHORT).show();
@@ -429,44 +425,6 @@ public class MainActivity extends Activity {
         urlInput.setText(link);
         urlInput.setSelection(link.length());
         fetch(link);
-    }
-
-    private static String firstSupportedMediaLink(final String value) {
-        if (isSupportedMediaLink(value)) return value;
-        final java.util.regex.Matcher matcher = java.util.regex.Pattern
-                .compile("https?://\\S+")
-                .matcher(value);
-        while (matcher.find()) {
-            String candidate = matcher.group();
-            while (!candidate.isEmpty()) {
-                final char last = candidate.charAt(candidate.length() - 1);
-                if (last == '.' || last == ',' || last == ';' || last == ':'
-                        || last == ')' || last == ']' || last == '}'
-                        || last == '!' || last == '?' || last == '\'' || last == '"') {
-                    candidate = candidate.substring(0, candidate.length() - 1);
-                } else {
-                    break;
-                }
-            }
-            if (isSupportedMediaLink(candidate)) return candidate;
-        }
-        return null;
-    }
-
-    private static boolean isSupportedMediaLink(final String value) {
-        if (!looksLikeUrl(value)) return false;
-        if (Spotify.isSpotifyUrl(value)) return true;
-        try {
-            if (ServiceList.YouTube.getLinkTypeByUrl(value) != StreamingService.LinkType.NONE) {
-                return true;
-            }
-        } catch (final Exception ignored) {}
-        try {
-            return ServiceList.SoundCloud.getLinkTypeByUrl(value)
-                    != StreamingService.LinkType.NONE;
-        } catch (final Exception ignored) {
-            return false;
-        }
     }
 
     private AdapterView.OnItemSelectedListener queueRefreshListener() {
