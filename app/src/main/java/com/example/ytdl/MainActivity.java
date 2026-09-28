@@ -420,14 +420,37 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "Clipboard has no text", Toast.LENGTH_SHORT).show();
             return;
         }
-        if (!isSupportedMediaLink(value)) {
+        final String link = firstSupportedMediaLink(value);
+        if (link == null) {
             Toast.makeText(this, "Clipboard doesn't contain a supported media link",
                     Toast.LENGTH_SHORT).show();
             return;
         }
-        urlInput.setText(value);
-        urlInput.setSelection(value.length());
-        fetch(value);
+        urlInput.setText(link);
+        urlInput.setSelection(link.length());
+        fetch(link);
+    }
+
+    private static String firstSupportedMediaLink(final String value) {
+        if (isSupportedMediaLink(value)) return value;
+        final java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("https?://\\S+")
+                .matcher(value);
+        while (matcher.find()) {
+            String candidate = matcher.group();
+            while (!candidate.isEmpty()) {
+                final char last = candidate.charAt(candidate.length() - 1);
+                if (last == '.' || last == ',' || last == ';' || last == ':'
+                        || last == ')' || last == ']' || last == '}'
+                        || last == '!' || last == '?' || last == '\'' || last == '"') {
+                    candidate = candidate.substring(0, candidate.length() - 1);
+                } else {
+                    break;
+                }
+            }
+            if (isSupportedMediaLink(candidate)) return candidate;
+        }
+        return null;
     }
 
     private static boolean isSupportedMediaLink(final String value) {
