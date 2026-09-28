@@ -8,13 +8,8 @@ import android.view.Gravity;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
 /** Exported entry point for shared/opened media links. */
 public final class LinkRouterActivity extends Activity {
-    private static final Pattern URL_IN_TEXT = Pattern.compile("https?://\\S+");
-
     @Override
     protected void onCreate(final Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -54,13 +49,10 @@ public final class LinkRouterActivity extends Activity {
     private static String extractLink(final Intent intent) {
         if (intent == null) return null;
         if (Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
-            return intent.getData().toString();
+            return LinkParser.firstSupportedMediaLink(intent.getData().toString());
         }
         if (Intent.ACTION_SEND.equals(intent.getAction())) {
-            final String text = intent.getStringExtra(Intent.EXTRA_TEXT);
-            if (text == null) return null;
-            final Matcher matcher = URL_IN_TEXT.matcher(text);
-            return matcher.find() ? matcher.group().replaceAll("[),.;]+$", "") : null;
+            return LinkParser.firstSupportedMediaLink(intent.getStringExtra(Intent.EXTRA_TEXT));
         }
         return null;
     }
