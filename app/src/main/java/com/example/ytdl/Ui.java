@@ -11,6 +11,7 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -25,7 +26,6 @@ import java.util.WeakHashMap;
 /** Central visual system shared by every screen. */
 public final class Ui {
 
-    /** Deep neutral background with slightly lifted cards for clearer hierarchy. */
     public static final int BG = Color.parseColor("#090D13");
     public static final int SURFACE = Color.parseColor("#121922");
     public static final int SURFACE_RAISED = Color.parseColor("#18222E");
@@ -33,13 +33,11 @@ public final class Ui {
     public static final int TEXT = Color.parseColor("#F4F7FB");
     public static final int MUTED = Color.parseColor("#98A6B8");
 
-    /** Primary action and transfer state. */
     public static final int ACCENT = Color.parseColor("#70A7FF");
     public static final int ACCENT_SOFT = Color.parseColor("#1A2A40");
     public static final int OK = Color.parseColor("#62C995");
     public static final int ERR = Color.parseColor("#FF7474");
 
-    /** Keep text comfortably readable without making dense technical rows oversized. */
     public static final float TYPE_SCALE = 1.10f;
 
     private static final float MIN_RADIUS_DP = 12f;
@@ -49,8 +47,7 @@ public final class Ui {
         return baseSp * TYPE_SCALE;
     }
 
-    private Ui() {
-    }
+    private Ui() {}
 
     public static int dp(final Context context, final float value) {
         return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value,
@@ -62,10 +59,6 @@ public final class Ui {
                 context.getResources().getDisplayMetrics()));
     }
 
-    /**
-     * Rounded surface used by fields, cards and controls. Small legacy radii are promoted to
-     * a consistent modern radius so every screen gains the same visual language.
-     */
     public static GradientDrawable box(final Context context, final int fill,
                                        final int stroke, final float radiusDp) {
         final GradientDrawable d = new GradientDrawable();
@@ -77,19 +70,15 @@ public final class Ui {
         return d;
     }
 
-    /** Tappable surfaces keep their outline and gain a visible raised pressed state. */
     public static StateListDrawable pressable(final Context context, final int resting,
                                               final int pressed, final float radiusDp) {
         final StateListDrawable states = new StateListDrawable();
-        states.addState(new int[]{android.R.attr.state_pressed},
-                box(context, pressed, LINE, radiusDp));
-        states.addState(new int[]{android.R.attr.state_focused},
-                box(context, SURFACE_RAISED, ACCENT, radiusDp));
+        states.addState(new int[]{android.R.attr.state_pressed}, box(context, pressed, LINE, radiusDp));
+        states.addState(new int[]{android.R.attr.state_focused}, box(context, SURFACE_RAISED, ACCENT, radiusDp));
         states.addState(new int[]{}, box(context, resting, LINE, radiusDp));
         return states;
     }
 
-    /** Machine data: resolutions, bitrates, byte counts and container names. */
     public static TextView mono(final Context context, final float sizeSp, final int color) {
         final TextView t = new TextView(context);
         t.setTypeface(Typeface.MONOSPACE);
@@ -99,7 +88,6 @@ public final class Ui {
         return t;
     }
 
-    /** Prose: titles, uploader names and instructions. */
     public static TextView sans(final Context context, final float sizeSp, final int color) {
         final TextView t = new TextView(context);
         t.setTextSize(size(sizeSp));
@@ -108,21 +96,36 @@ public final class Ui {
         return t;
     }
 
-    /**
-     * Applies the second-generation layout without coupling download logic to presentation.
-     * MainActivity intentionally builds views in Java, so this layer reorganizes those existing
-     * controls after creation rather than duplicating or replacing their listeners/state.
-     */
     public static void polishActivity(final Activity activity) {
         if (activity == null || POLISHED.containsKey(activity)) return;
         if (!(activity instanceof MainActivity) && !(activity instanceof HistoryActivity)) return;
         POLISHED.put(activity, Boolean.TRUE);
+        polishSystemChrome(activity);
         final View content = activity.findViewById(android.R.id.content);
         if (!(content instanceof ViewGroup)) return;
         ((ViewGroup) content).post(() -> {
             if (activity instanceof MainActivity) polishMain(activity, (ViewGroup) content);
             else polishHistory(activity, (ViewGroup) content);
         });
+    }
+
+    private static void polishSystemChrome(final Activity activity) {
+        final Window window = activity.getWindow();
+        if (window == null) return;
+        window.setStatusBarColor(BG);
+        window.setNavigationBarColor(BG);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            window.getDecorView().setSystemUiVisibility(0);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.setNavigationBarDividerColor(BG);
+        }
+    }
+
+    private static boolean narrow(final Context context) {
+        final float density = context.getResources().getDisplayMetrics().density;
+        final int widthDp = Math.round(context.getResources().getDisplayMetrics().widthPixels / density);
+        return widthDp < 390;
     }
 
     private static void polishMain(final Activity activity, final ViewGroup content) {
@@ -152,15 +155,15 @@ public final class Ui {
 
         final LinearLayout header = new LinearLayout(activity);
         header.setOrientation(LinearLayout.VERTICAL);
-        header.setPadding(dp(activity, 20), dp(activity, 20), dp(activity, 20), dp(activity, 14));
+        header.setPadding(dp(activity, 20), dp(activity, 18), dp(activity, 20), dp(activity, 12));
 
-        final TextView title = sans(activity, 25, TEXT);
+        final TextView title = sans(activity, narrow(activity) ? 23 : 25, TEXT);
         title.setText("Downloader");
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         header.addView(title);
 
         final TextView subtitle = sans(activity, 12, MUTED);
-        subtitle.setText("Video, audio and playlists — one clean queue");
+        subtitle.setText("YouTube · Spotify · SoundCloud");
         subtitle.setPadding(0, dp(activity, 5), 0, 0);
         header.addView(subtitle);
 
@@ -201,6 +204,7 @@ public final class Ui {
             final EditText field = (EditText) input;
             field.setTextSize(size(15));
             field.setTypeface(Typeface.DEFAULT);
+            field.setSingleLine(false);
             field.setMinHeight(dp(activity, 58));
             field.setPadding(dp(activity, 16), dp(activity, 14), dp(activity, 16), dp(activity, 14));
             field.setBackground(box(activity, SURFACE_RAISED, LINE, 16));
@@ -208,53 +212,73 @@ public final class Ui {
 
         final View clipboard = pane.getChildAt(1);
         if (clipboard instanceof LinearLayout) {
-            final LinearLayout row = (LinearLayout) clipboard;
-            equalizeChildren(activity, row, 42);
+            equalizeChildren(activity, (LinearLayout) clipboard, 42);
         }
 
-        // Collapse three vertically stacked search filters into one compact horizontal strip.
         final View source = pane.getChildAt(2);
         final View duration = pane.getChildAt(3);
         final View sort = pane.getChildAt(4);
         pane.removeView(source);
         pane.removeView(duration);
         pane.removeView(sort);
-        final LinearLayout filters = new LinearLayout(activity);
-        filters.setOrientation(LinearLayout.HORIZONTAL);
-        addWeighted(activity, filters, source, 1.15f, 0);
-        addWeighted(activity, filters, duration, 1f, 8);
-        addWeighted(activity, filters, sort, 1f, 8);
-        final LinearLayout.LayoutParams filterParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(activity, 46));
-        filterParams.topMargin = dp(activity, 10);
-        pane.addView(filters, 2, filterParams);
 
-        // Recent + primary action now read as a single action row instead of another stack.
+        final LinearLayout filterBlock = new LinearLayout(activity);
+        filterBlock.setOrientation(LinearLayout.VERTICAL);
+        if (narrow(activity)) {
+            final LinearLayout first = new LinearLayout(activity);
+            first.setOrientation(LinearLayout.HORIZONTAL);
+            first.addView(source, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(activity, 44)));
+            filterBlock.addView(first);
+
+            final LinearLayout second = new LinearLayout(activity);
+            second.setOrientation(LinearLayout.HORIZONTAL);
+            addWeighted(activity, second, duration, 1f, 0);
+            addWeighted(activity, second, sort, 1f, 8);
+            final LinearLayout.LayoutParams secondParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(activity, 44));
+            secondParams.topMargin = dp(activity, 8);
+            filterBlock.addView(second, secondParams);
+        } else {
+            final LinearLayout filters = new LinearLayout(activity);
+            filters.setOrientation(LinearLayout.HORIZONTAL);
+            addWeighted(activity, filters, source, 1.15f, 0);
+            addWeighted(activity, filters, duration, 1f, 8);
+            addWeighted(activity, filters, sort, 1f, 8);
+            filterBlock.addView(filters, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(activity, 46)));
+        }
+        final LinearLayout.LayoutParams filterBlockParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        filterBlockParams.topMargin = dp(activity, 10);
+        pane.addView(filterBlock, 2, filterBlockParams);
+
         final View recent = pane.getChildAt(3);
         final View fetch = pane.getChildAt(4);
         pane.removeView(recent);
         pane.removeView(fetch);
         final LinearLayout actions = new LinearLayout(activity);
         actions.setOrientation(LinearLayout.HORIZONTAL);
-        addWeighted(activity, actions, recent, .85f, 0);
-        addWeighted(activity, actions, fetch, 1.65f, 8);
+        addWeighted(activity, actions, recent, .8f, 0);
+        addWeighted(activity, actions, fetch, 1.7f, 8);
         final LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(activity, 48));
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(activity, 50));
         actionParams.topMargin = dp(activity, 10);
         pane.addView(actions, 3, actionParams);
 
         if (fetch instanceof Button) {
             final Button b = (Button) fetch;
             b.setText("SEARCH / INSPECT");
-            b.setTextSize(size(13));
-            b.setLetterSpacing(.04f);
+            b.setTextSize(size(narrow(activity) ? 12 : 13));
+            b.setLetterSpacing(.03f);
             b.setBackground(pressable(activity, ACCENT, Color.parseColor("#5C91E8"), 14));
         }
         if (recent instanceof Button) {
-            ((Button) recent).setText("RECENT");
+            final Button b = (Button) recent;
+            b.setText("RECENT");
+            b.setTextSize(size(11));
         }
 
-        // Updated indexes after grouping: preview=4, status=5, audio=6, list=7.
         if (pane.getChildCount() >= 8) {
             final View preview = pane.getChildAt(4);
             if (preview instanceof ImageView) {
@@ -263,7 +287,7 @@ public final class Ui {
                 final ViewGroup.LayoutParams raw = preview.getLayoutParams();
                 if (raw instanceof LinearLayout.LayoutParams) {
                     final LinearLayout.LayoutParams p = (LinearLayout.LayoutParams) raw;
-                    p.height = dp(activity, 184);
+                    p.height = dp(activity, narrow(activity) ? 164 : 184);
                     p.topMargin = dp(activity, 14);
                     preview.setLayoutParams(p);
                 }
@@ -274,6 +298,7 @@ public final class Ui {
                 final TextView text = (TextView) status;
                 text.setTextSize(size(14));
                 text.setTextColor(TEXT);
+                text.setLineSpacing(dp(activity, 2), 1f);
                 text.setPadding(dp(activity, 14), dp(activity, 12), dp(activity, 14), dp(activity, 12));
                 text.setBackground(box(activity, SURFACE, LINE, 14));
                 final LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
@@ -285,8 +310,10 @@ public final class Ui {
 
             final View list = pane.getChildAt(7);
             if (list instanceof ListView) {
-                ((ListView) list).setClipToPadding(false);
-                list.setPadding(0, 0, 0, dp(activity, 12));
+                final ListView resultList = (ListView) list;
+                resultList.setClipToPadding(false);
+                resultList.setPadding(0, 0, 0, dp(activity, 16));
+                resultList.setVerticalScrollBarEnabled(false);
             }
         }
     }
@@ -309,7 +336,6 @@ public final class Ui {
             text.setLayoutParams(p);
         }
 
-        // Filter and sort live on one row on modern phone widths.
         final View filter = pane.getChildAt(2);
         final View sort = pane.getChildAt(3);
         pane.removeView(filter);
@@ -323,10 +349,9 @@ public final class Ui {
         fp.bottomMargin = dp(activity, 10);
         pane.addView(filterRow, 2, fp);
 
-        // After grouping: batch=3, pause=4, retry=5, history=6, list=7, clear=8.
         if (pane.getChildCount() >= 9) {
             final View batch = pane.getChildAt(3);
-            if (batch instanceof LinearLayout) equalizeChildren(activity, (LinearLayout) batch, 40);
+            if (batch instanceof LinearLayout) equalizeChildren(activity, (LinearLayout) batch, 42);
 
             final View pause = pane.getChildAt(4);
             final View retry = pane.getChildAt(5);
@@ -334,21 +359,38 @@ public final class Ui {
             pane.removeView(pause);
             pane.removeView(retry);
             pane.removeView(history);
+
             final LinearLayout utilities = new LinearLayout(activity);
-            utilities.setOrientation(LinearLayout.HORIZONTAL);
-            addWeighted(activity, utilities, pause, 1.25f, 0);
-            addWeighted(activity, utilities, retry, 1f, 8);
-            addWeighted(activity, utilities, history, .9f, 8);
+            if (narrow(activity)) {
+                utilities.setOrientation(LinearLayout.VERTICAL);
+                final LinearLayout firstRow = new LinearLayout(activity);
+                firstRow.setOrientation(LinearLayout.HORIZONTAL);
+                addWeighted(activity, firstRow, pause, 1.3f, 0);
+                addWeighted(activity, firstRow, retry, 1f, 8);
+                utilities.addView(firstRow, new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, dp(activity, 42)));
+                final LinearLayout.LayoutParams historyParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, dp(activity, 42));
+                historyParams.topMargin = dp(activity, 8);
+                utilities.addView(history, historyParams);
+            } else {
+                utilities.setOrientation(LinearLayout.HORIZONTAL);
+                addWeighted(activity, utilities, pause, 1.25f, 0);
+                addWeighted(activity, utilities, retry, 1f, 8);
+                addWeighted(activity, utilities, history, .9f, 8);
+            }
             final LinearLayout.LayoutParams up = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(activity, 44));
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             up.topMargin = dp(activity, 10);
             up.bottomMargin = dp(activity, 12);
             pane.addView(utilities, 4, up);
 
             final View list = pane.getChildAt(5);
             if (list instanceof ListView) {
-                ((ListView) list).setClipToPadding(false);
-                list.setPadding(0, 0, 0, dp(activity, 8));
+                final ListView queue = (ListView) list;
+                queue.setClipToPadding(false);
+                queue.setPadding(0, 0, 0, dp(activity, 12));
+                queue.setVerticalScrollBarEnabled(false);
             }
         }
     }
@@ -362,11 +404,17 @@ public final class Ui {
             final TextView title = (TextView) root.getChildAt(0);
             title.setText("Download history");
             title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-            title.setTextSize(size(24));
+            title.setTextSize(size(narrow(activity) ? 22 : 24));
             title.setLetterSpacing(0f);
         }
         if (root.getChildCount() > 1 && root.getChildAt(1) instanceof TextView) {
             ((TextView) root.getChildAt(1)).setTextSize(size(13));
+        }
+        for (int i = 0; i < root.getChildCount(); i++) {
+            final View child = root.getChildAt(i);
+            if (child instanceof ListView) {
+                ((ListView) child).setVerticalScrollBarEnabled(false);
+            }
         }
     }
 
@@ -398,9 +446,7 @@ public final class Ui {
     }
 
     public static String bytes(final long count) {
-        if (count < 1024) {
-            return count + " B";
-        }
+        if (count < 1024) return count + " B";
         if (count < 1024 * 1024) {
             return String.format(java.util.Locale.US, "%.0f KB", count / 1024.0);
         }
