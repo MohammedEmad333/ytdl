@@ -7,41 +7,27 @@ import android.graphics.drawable.StateListDrawable;
 import android.util.TypedValue;
 import android.widget.TextView;
 
-/**
- * The design, such as it is.
- *
- * Direction: this is a transfer monitor, not a consumer app. Its subject matter is codecs,
- * containers, bitrates and byte counts — tabular technical data — so it's built to read like
- * an instrument panel rather than a feed. Dark, dense, monospaced where the content is
- * actually machine data, with one signal colour reserved for "in transit". Amber is a state,
- * not decoration: nothing else in the app is allowed to use it.
- *
- * The one deliberate flourish is progress. Not a chunky bar widget — a hairline rule under
- * each row that fills left to right, so a queue of five reads as five lines advancing at
- * different rates. That's the thing worth remembering, so everything around it stays quiet.
- *
- * Custom fonts would be the obvious next lever, and they're deliberately absent: font files
- * are binary, and this repo doesn't have any. Monospace is the system face, which is exactly
- * why it's carrying the personality here — it's the only characterful thing available.
- */
+/** Central visual system shared by every screen. */
 public final class Ui {
 
-    public static final int BG = Color.parseColor("#0B0E13");
-    public static final int SURFACE = Color.parseColor("#151A21");
-    public static final int LINE = Color.parseColor("#262D38");
-    public static final int TEXT = Color.parseColor("#E8EDF2");
-    public static final int MUTED = Color.parseColor("#8B96A5");
+    /** Deep neutral background with slightly lifted cards for clearer hierarchy. */
+    public static final int BG = Color.parseColor("#090D13");
+    public static final int SURFACE = Color.parseColor("#121922");
+    public static final int SURFACE_RAISED = Color.parseColor("#18222E");
+    public static final int LINE = Color.parseColor("#263445");
+    public static final int TEXT = Color.parseColor("#F4F7FB");
+    public static final int MUTED = Color.parseColor("#98A6B8");
 
-    /** In transit. Reserved — using it for anything else spends the one loud thing. */
-    public static final int ACCENT = Color.parseColor("#F0A030");
-    public static final int OK = Color.parseColor("#4FB477");
-    public static final int ERR = Color.parseColor("#E5534B");
+    /** Primary action and transfer state. */
+    public static final int ACCENT = Color.parseColor("#70A7FF");
+    public static final int ACCENT_SOFT = Color.parseColor("#1A2A40");
+    public static final int OK = Color.parseColor("#62C995");
+    public static final int ERR = Color.parseColor("#FF7474");
 
-    /**
-     * One knob for the whole type scale. Every text size in the app multiplies through here,
-     * so "make it bigger" is one number rather than thirty edits scattered across two files.
-     */
-    public static final float TYPE_SCALE = 1.15f;
+    /** Keep text comfortably readable without making dense technical rows oversized. */
+    public static final float TYPE_SCALE = 1.10f;
+
+    private static final float MIN_RADIUS_DP = 12f;
 
     public static float size(final float baseSp) {
         return baseSp * TYPE_SCALE;
@@ -60,42 +46,49 @@ public final class Ui {
                 context.getResources().getDisplayMetrics()));
     }
 
-    /** Flat filled rectangle with an optional hairline border. */
+    /**
+     * Rounded surface used by fields, cards and controls. Small legacy radii are promoted to
+     * a consistent modern radius so every screen gains the same visual language.
+     */
     public static GradientDrawable box(final Context context, final int fill,
                                        final int stroke, final float radiusDp) {
         final GradientDrawable d = new GradientDrawable();
         d.setColor(fill);
-        d.setCornerRadius(dp(context, radiusDp));
+        d.setCornerRadius(dp(context, Math.max(radiusDp, MIN_RADIUS_DP)));
         if (stroke != Color.TRANSPARENT) {
-            d.setStroke(Math.max(1, dp(context, 0.5f)), stroke);
+            d.setStroke(Math.max(1, dp(context, 1f)), stroke);
         }
         return d;
     }
 
-    /** Gives a tappable row a visible pressed state without a ripple resource. */
+    /** Tappable surfaces keep their outline and gain a visible raised pressed state. */
     public static StateListDrawable pressable(final Context context, final int resting,
                                               final int pressed, final float radiusDp) {
         final StateListDrawable states = new StateListDrawable();
         states.addState(new int[]{android.R.attr.state_pressed},
-                box(context, pressed, Color.TRANSPARENT, radiusDp));
-        states.addState(new int[]{}, box(context, resting, Color.TRANSPARENT, radiusDp));
+                box(context, pressed, LINE, radiusDp));
+        states.addState(new int[]{android.R.attr.state_focused},
+                box(context, SURFACE_RAISED, ACCENT, radiusDp));
+        states.addState(new int[]{}, box(context, resting, LINE, radiusDp));
         return states;
     }
 
-    /** Machine data: resolutions, bitrates, byte counts, container names. */
+    /** Machine data: resolutions, bitrates, byte counts and container names. */
     public static TextView mono(final Context context, final float sizeSp, final int color) {
         final TextView t = new TextView(context);
         t.setTypeface(android.graphics.Typeface.MONOSPACE);
         t.setTextSize(size(sizeSp));
         t.setTextColor(color);
+        t.setIncludeFontPadding(false);
         return t;
     }
 
-    /** Prose: titles, uploader names, instructions. */
+    /** Prose: titles, uploader names and instructions. */
     public static TextView sans(final Context context, final float sizeSp, final int color) {
         final TextView t = new TextView(context);
         t.setTextSize(size(sizeSp));
         t.setTextColor(color);
+        t.setIncludeFontPadding(false);
         return t;
     }
 
