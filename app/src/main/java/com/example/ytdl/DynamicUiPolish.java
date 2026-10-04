@@ -44,9 +44,7 @@ public final class DynamicUiPolish {
         }
         if (!(view instanceof ViewGroup)) return;
         final ViewGroup group = (ViewGroup) view;
-        for (int i = 0; i < group.getChildCount(); i++) {
-            collectLists(group.getChildAt(i), out);
-        }
+        for (int i = 0; i < group.getChildCount(); i++) collectLists(group.getChildAt(i), out);
     }
 
     private static void installList(final Activity activity, final ListView list,
@@ -59,6 +57,7 @@ public final class DynamicUiPolish {
         list.setDivider(null);
         list.setVerticalScrollBarEnabled(false);
         list.setClipToPadding(false);
+        list.setCacheColorHint(android.graphics.Color.TRANSPARENT);
         polishVisibleRows(activity, list, queue, history);
         list.setOnHierarchyChangeListener(new ViewGroup.OnHierarchyChangeListener() {
             @Override public void onChildViewAdded(final View parent, final View child) {
@@ -83,8 +82,7 @@ public final class DynamicUiPolish {
             empty.setTextColor(Ui.MUTED);
             empty.setTextSize(Ui.size(14));
             empty.setMinHeight(Ui.dp(activity, 132));
-            empty.setPadding(Ui.dp(activity, 18), Ui.dp(activity, 24),
-                    Ui.dp(activity, 18), Ui.dp(activity, 24));
+            empty.setPadding(Ui.dp(activity, 18), Ui.dp(activity, 24), Ui.dp(activity, 18), Ui.dp(activity, 24));
             empty.setBackground(Ui.box(activity, Ui.SURFACE, Ui.LINE, 18));
             return;
         }
@@ -94,19 +92,15 @@ public final class DynamicUiPolish {
         final LinearLayout card = findCard(outer);
         if (card == null) return;
 
-        card.setPadding(Ui.dp(activity, 15), Ui.dp(activity, 13),
-                Ui.dp(activity, 15), Ui.dp(activity, 13));
+        card.setPadding(Ui.dp(activity, 15), Ui.dp(activity, 13), Ui.dp(activity, 15), Ui.dp(activity, 13));
         card.setBackground(queue || history
                 ? Ui.box(activity, Ui.SURFACE_RAISED, Ui.LINE, 18)
                 : Ui.pressable(activity, Ui.SURFACE_RAISED, Ui.ACCENT_SOFT, 18));
+        card.setMinimumHeight(Ui.dp(activity, queue || history ? 84 : 76));
 
-        if (history) {
-            polishHistoryCard(activity, card);
-        } else if (queue) {
-            polishQueueCard(activity, card);
-        } else {
-            polishResultCard(activity, card);
-        }
+        if (history) polishHistoryCard(activity, card);
+        else if (queue) polishQueueCard(activity, card);
+        else polishResultCard(activity, card);
     }
 
     private static LinearLayout findCard(final LinearLayout row) {
@@ -117,6 +111,10 @@ public final class DynamicUiPolish {
     }
 
     private static void polishResultCard(final Activity activity, final LinearLayout card) {
+        card.setClickable(true);
+        card.setFocusable(true);
+        card.setContentDescription("Tap to choose this format or result");
+
         for (int i = 0; i < card.getChildCount(); i++) {
             final View child = card.getChildAt(i);
             if (child instanceof ImageView) {
@@ -143,8 +141,10 @@ public final class DynamicUiPolish {
                 if (text.getChildCount() > 1 && text.getChildAt(1) instanceof TextView) {
                     final TextView meta = (TextView) text.getChildAt(1);
                     meta.setTextSize(Ui.size(11));
-                    meta.setTextColor(Ui.MUTED);
+                    meta.setTextColor(Ui.ACCENT);
+                    meta.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
                     meta.setLineSpacing(Ui.dp(activity, 1), 1f);
+                    meta.setPadding(0, Ui.dp(activity, 4), 0, 0);
                 }
             }
         }
@@ -166,21 +166,19 @@ public final class DynamicUiPolish {
         }
         if (card.getChildCount() > 2 && card.getChildAt(2) instanceof LinearLayout) {
             final LinearLayout progress = (LinearLayout) card.getChildAt(2);
-            progress.setMinimumHeight(Ui.dp(activity, 5));
+            progress.setMinimumHeight(Ui.dp(activity, 6));
             for (int i = 0; i < progress.getChildCount(); i++) {
                 final View segment = progress.getChildAt(i);
                 final ViewGroup.LayoutParams raw = segment.getLayoutParams();
                 if (raw instanceof LinearLayout.LayoutParams) {
                     final LinearLayout.LayoutParams p = (LinearLayout.LayoutParams) raw;
-                    p.height = Ui.dp(activity, 5);
+                    p.height = Ui.dp(activity, 6);
                     segment.setLayoutParams(p);
                 }
             }
         }
         for (int i = 3; i < card.getChildCount(); i++) {
-            if (card.getChildAt(i) instanceof LinearLayout) {
-                polishActionRow(activity, (LinearLayout) card.getChildAt(i));
-            }
+            if (card.getChildAt(i) instanceof LinearLayout) polishActionRow(activity, (LinearLayout) card.getChildAt(i));
         }
     }
 
@@ -190,30 +188,36 @@ public final class DynamicUiPolish {
             title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             title.setTextSize(Ui.size(15));
             title.setTextColor(Ui.TEXT);
+            title.setMaxLines(2);
         }
         if (card.getChildCount() > 1 && card.getChildAt(1) instanceof TextView) {
             final TextView state = (TextView) card.getChildAt(1);
             state.setTextSize(Ui.size(11));
-            state.setPadding(0, Ui.dp(activity, 5), 0, 0);
+            state.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+            state.setPadding(0, Ui.dp(activity, 6), 0, Ui.dp(activity, 2));
         }
         for (int i = 2; i < card.getChildCount(); i++) {
-            if (card.getChildAt(i) instanceof LinearLayout) {
-                polishActionRow(activity, (LinearLayout) card.getChildAt(i));
-            }
+            if (card.getChildAt(i) instanceof LinearLayout) polishActionRow(activity, (LinearLayout) card.getChildAt(i));
         }
     }
 
     private static void polishActionRow(final Activity activity, final LinearLayout row) {
+        row.setGravity(Gravity.CENTER_VERTICAL);
         for (int i = 0; i < row.getChildCount(); i++) {
             final View child = row.getChildAt(i);
             if (!(child instanceof TextView)) continue;
             final TextView action = (TextView) child;
-            action.setMinHeight(Ui.dp(activity, 38));
+            final String label = action.getText() == null ? "" : action.getText().toString().trim().toLowerCase();
+            final boolean primary = label.contains("open") || label.contains("resume") || label.contains("retry");
+            action.setMinHeight(Ui.dp(activity, 40));
             action.setGravity(Gravity.CENTER);
+            action.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             action.setTextSize(Ui.size(10.5f));
-            action.setPadding(Ui.dp(activity, 10), Ui.dp(activity, 7),
-                    Ui.dp(activity, 10), Ui.dp(activity, 7));
-            action.setBackground(Ui.pressable(activity, Ui.SURFACE, Ui.SURFACE_RAISED, 12));
+            action.setPadding(Ui.dp(activity, 12), Ui.dp(activity, 7), Ui.dp(activity, 12), Ui.dp(activity, 7));
+            action.setBackground(primary
+                    ? Ui.pressable(activity, Ui.ACCENT_SOFT, Ui.SURFACE_RAISED, 12)
+                    : Ui.pressable(activity, Ui.SURFACE, Ui.SURFACE_RAISED, 12));
+            if (primary) action.setTextColor(Ui.ACCENT);
         }
     }
 }
