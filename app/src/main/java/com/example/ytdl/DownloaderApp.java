@@ -16,6 +16,7 @@ public final class DownloaderApp extends Application {
             @Override public void onActivityResumed(final Activity activity) {
                 Ui.polishActivity(activity);
                 DynamicUiPolish.install(activity);
+                InteractionUiPolish.install(activity);
             }
             @Override public void onActivityPaused(final Activity activity) {}
             @Override public void onActivityStopped(final Activity activity) {}
