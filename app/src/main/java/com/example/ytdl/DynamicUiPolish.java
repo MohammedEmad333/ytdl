@@ -1,6 +1,7 @@
 package com.example.ytdl;
 
 import android.app.Activity;
+import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Build;
 import android.view.Gravity;
@@ -57,7 +58,7 @@ public final class DynamicUiPolish {
         list.setDivider(null);
         list.setVerticalScrollBarEnabled(false);
         list.setClipToPadding(false);
-        list.setCacheColorHint(android.graphics.Color.TRANSPARENT);
+        list.setCacheColorHint(Color.TRANSPARENT);
         polishVisibleRows(activity, list, queue, history);
         list.setOnHierarchyChangeListener(new ViewGroup.OnHierarchyChangeListener() {
             @Override public void onChildViewAdded(final View parent, final View child) {
@@ -163,6 +164,7 @@ public final class DynamicUiPolish {
             meta.setTextSize(Ui.size(11));
             meta.setLineSpacing(Ui.dp(activity, 1), 1f);
             meta.setPadding(0, Ui.dp(activity, 5), 0, Ui.dp(activity, 9));
+            applyStateAppearance(activity, card, meta);
         }
         if (card.getChildCount() > 2 && card.getChildAt(2) instanceof LinearLayout) {
             final LinearLayout progress = (LinearLayout) card.getChildAt(2);
@@ -195,9 +197,33 @@ public final class DynamicUiPolish {
             state.setTextSize(Ui.size(11));
             state.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
             state.setPadding(0, Ui.dp(activity, 6), 0, Ui.dp(activity, 2));
+            applyStateAppearance(activity, card, state);
         }
         for (int i = 2; i < card.getChildCount(); i++) {
             if (card.getChildAt(i) instanceof LinearLayout) polishActionRow(activity, (LinearLayout) card.getChildAt(i));
+        }
+    }
+
+    private static void applyStateAppearance(final Activity activity, final LinearLayout card,
+                                             final TextView stateView) {
+        final String text = stateView.getText() == null ? ""
+                : stateView.getText().toString().toLowerCase(java.util.Locale.US);
+        final boolean done = text.contains("done") || text.contains("complete") || text.contains("saved");
+        final boolean failed = text.contains("failed") || text.contains("error");
+        final boolean cancelled = text.contains("cancelled") || text.contains("canceled");
+
+        if (done) {
+            stateView.setTextColor(Ui.OK);
+            card.setBackground(Ui.box(activity, Ui.SURFACE_RAISED, Color.parseColor("#315D4A"), 18));
+            card.setContentDescription("Download complete. Open or share this file.");
+        } else if (failed) {
+            stateView.setTextColor(Ui.ERR);
+            card.setBackground(Ui.box(activity, Ui.SURFACE_RAISED, Color.parseColor("#67383D"), 18));
+            card.setContentDescription("Download failed. Retry is available.");
+        } else if (cancelled) {
+            stateView.setTextColor(Ui.MUTED);
+            card.setBackground(Ui.box(activity, Ui.SURFACE_RAISED, Color.parseColor("#4A515C"), 18));
+            card.setContentDescription("Download cancelled.");
         }
     }
 
@@ -207,17 +233,33 @@ public final class DynamicUiPolish {
             final View child = row.getChildAt(i);
             if (!(child instanceof TextView)) continue;
             final TextView action = (TextView) child;
-            final String label = action.getText() == null ? "" : action.getText().toString().trim().toLowerCase();
-            final boolean primary = label.contains("open") || label.contains("resume") || label.contains("retry");
+            final String label = action.getText() == null ? "" : action.getText().toString().trim().toLowerCase(java.util.Locale.US);
+            final boolean open = label.contains("open");
+            final boolean retry = label.contains("retry");
+            final boolean resume = label.contains("resume");
+            final boolean share = label.contains("share");
+            final boolean primary = open || retry || resume;
+
             action.setMinHeight(Ui.dp(activity, 40));
             action.setGravity(Gravity.CENTER);
             action.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
             action.setTextSize(Ui.size(10.5f));
             action.setPadding(Ui.dp(activity, 12), Ui.dp(activity, 7), Ui.dp(activity, 12), Ui.dp(activity, 7));
-            action.setBackground(primary
-                    ? Ui.pressable(activity, Ui.ACCENT_SOFT, Ui.SURFACE_RAISED, 12)
-                    : Ui.pressable(activity, Ui.SURFACE, Ui.SURFACE_RAISED, 12));
-            if (primary) action.setTextColor(Ui.ACCENT);
+
+            if (retry) {
+                action.setBackground(Ui.pressable(activity, Color.parseColor("#392229"), Color.parseColor("#4B2931"), 12));
+                action.setTextColor(Ui.ERR);
+            } else if (open || resume) {
+                action.setBackground(Ui.pressable(activity, Ui.ACCENT_SOFT, Ui.SURFACE_RAISED, 12));
+                action.setTextColor(Ui.ACCENT);
+            } else if (share) {
+                action.setBackground(Ui.pressable(activity, Ui.SURFACE, Ui.SURFACE_RAISED, 12));
+                action.setTextColor(Ui.OK);
+            } else {
+                action.setBackground(Ui.pressable(activity, Ui.SURFACE, Ui.SURFACE_RAISED, 12));
+            }
+
+            if (primary) action.setMinWidth(Ui.dp(activity, 82));
         }
     }
 }
