@@ -1,18 +1,25 @@
 package com.example.ytdl;
 
+import android.app.Activity;
 import android.app.Application;
+import android.os.Bundle;
 
-/**
- * Process-level initialization.
- *
- * Spotify links are intentionally handled by MainActivity. Older builds watched the input
- * field here and replaced Spotify URLs with a YouTube match before FETCH was pressed. That
- * bypassed Spotify collection handling and discarded Spotify title/artist/cover metadata.
- */
+/** Process-level initialization and presentation wiring. */
 public final class DownloaderApp extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
         Net.ensureExtractor();
+        registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
+            @Override public void onActivityCreated(final Activity activity, final Bundle state) {}
+            @Override public void onActivityStarted(final Activity activity) {}
+            @Override public void onActivityResumed(final Activity activity) {
+                Ui.polishActivity(activity);
+            }
+            @Override public void onActivityPaused(final Activity activity) {}
+            @Override public void onActivityStopped(final Activity activity) {}
+            @Override public void onActivitySaveInstanceState(final Activity activity, final Bundle state) {}
+            @Override public void onActivityDestroyed(final Activity activity) {}
+        });
     }
 }
