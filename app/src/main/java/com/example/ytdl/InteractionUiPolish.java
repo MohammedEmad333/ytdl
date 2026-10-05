@@ -8,6 +8,7 @@ import android.text.TextWatcher;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.accessibility.AccessibilityEvent;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -91,6 +92,7 @@ public final class InteractionUiPolish {
         if (status == null) return;
 
         final String idleAction = action == null ? "" : action.getText().toString();
+        final boolean[] lastBusy = new boolean[]{false};
         status.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(final CharSequence s, final int start,
                                                     final int count, final int after) {}
@@ -118,6 +120,15 @@ public final class InteractionUiPolish {
                 if (action != null) {
                     action.setText(busy ? "WORKING…" : idleAction);
                     action.setAlpha(busy ? .72f : 1f);
+                    action.setEnabled(!busy);
+                    action.setClickable(!busy);
+                    action.setFocusable(!busy);
+                }
+
+                if (busy != lastBusy[0] || error) {
+                    status.setContentDescription(value);
+                    status.sendAccessibilityEvent(AccessibilityEvent.TYPE_ANNOUNCEMENT);
+                    lastBusy[0] = busy;
                 }
             }
             @Override public void afterTextChanged(final Editable s) {}
