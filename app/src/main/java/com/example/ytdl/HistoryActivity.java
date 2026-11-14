@@ -393,7 +393,7 @@ public final class HistoryActivity extends Activity {
                 actions.setOrientation(LinearLayout.HORIZONTAL);
                 actions.setPadding(0, Ui.dp(HistoryActivity.this, 12), 0, 0);
                 if (LocalMediaPlayerActivity.canPlay(task)) {
-                    actions.addView(action(tr("Play", "تشغيل"), Ui.OK,
+                    actions.addView(action(tr("Play in NOVA", "تشغيل في نوفا"), Ui.OK,
                             v -> playSaved(task)));
                 } else {
                     actions.addView(action(tr("Open file", "فتح"), Ui.OK,
