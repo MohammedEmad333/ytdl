@@ -66,6 +66,38 @@ public final class LibraryFilterTest {
                 LibraryFilter.ALL, LibraryFilter.NEWEST).isEmpty());
     }
 
+    @Test public void missingSpecDoesNotCrashAudioOrSubtitleFilters() {
+        final DownloadService.Task unknown = task("Incomplete", DownloadService.Kind.MUXED,
+                "application/octet-stream", DownloadService.State.DONE);
+        unknown.mimeType = null;
+        // Metadata from an old or partially restored item should never crash Library.
+        // Spec is final by construction, so use an empty incoming list and null entries
+        // for malformed records that the parser could otherwise skip.
+        assertTrue(LibraryFilter.select(Arrays.asList((DownloadService.Task) null), "",
+                LibraryFilter.AUDIO, LibraryFilter.NEWEST).isEmpty());
+        assertTrue(LibraryFilter.select(Arrays.asList((DownloadService.Task) null), "",
+                LibraryFilter.SUBTITLES, LibraryFilter.NEWEST).isEmpty());
+        assertTrue(LibraryFilter.select(Arrays.asList(unknown), "",
+                LibraryFilter.AUDIO, LibraryFilter.NEWEST).isEmpty());
+        assertTrue(LibraryFilter.select(Arrays.asList(unknown), "",
+                LibraryFilter.SUBTITLES, LibraryFilter.NEWEST).isEmpty());
+    }
+
+    @Test public void missingStateIsSafelySkipped() {
+        final DownloadService.Task malformed = task("Incomplete", DownloadService.Kind.MUXED,
+                "video/mp4", DownloadService.State.DONE);
+        malformed.state = null;
+        assertTrue(LibraryFilter.select(Arrays.asList(malformed), "",
+                LibraryFilter.ALL, LibraryFilter.NEWEST).isEmpty());
+    }
+
+    @Test public void textMimeIsCategorizedAsSubtitle() {
+        final DownloadService.Task caption = task("Caption", DownloadService.Kind.MUXED,
+                "text/vtt", DownloadService.State.DONE);
+        assertEquals(1, LibraryFilter.select(Arrays.asList(caption), "",
+                LibraryFilter.SUBTITLES, LibraryFilter.NEWEST).size());
+    }
+
     @Test public void orderChangesWithoutMutatingOriginalQueue() {
         final DownloadService.Task z = task("Zebra", DownloadService.Kind.MP3,
                 "audio/mpeg", DownloadService.State.DONE);
