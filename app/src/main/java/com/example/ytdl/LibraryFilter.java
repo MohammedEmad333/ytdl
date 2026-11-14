@@ -71,9 +71,8 @@ final class LibraryFilter {
                 ? "" : task.mimeType.toLowerCase(Locale.ROOT);
         if (category == VIDEO) return mime.startsWith("video/");
         if (category == AUDIO) return mime.startsWith("audio/")
-                || task.spec != null && task.spec.kind == DownloadService.Kind.MP3;
-        if (category == SUBTITLES) return task.spec != null
-                && task.spec.kind == DownloadService.Kind.SUBTITLE
+                || (task.spec != null && task.spec.kind == DownloadService.Kind.MP3);
+        if (category == SUBTITLES) return (task.spec != null && task.spec.kind == DownloadService.Kind.SUBTITLE)
                 || mime.startsWith("text/");
         return false;
     }
