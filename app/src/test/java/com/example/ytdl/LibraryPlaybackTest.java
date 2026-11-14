@@ -87,6 +87,22 @@ public final class LibraryPlaybackTest {
         assertEquals("1:01:01", LocalMediaPlayerActivity.formatTime(3_661_000));
     }
 
+    @Test public void skipControlsClampAtStartAndEnd() {
+        assertEquals(0, LocalMediaPlayerActivity.skipTarget(4_000, 60_000, -10_000));
+        assertEquals(60_000, LocalMediaPlayerActivity.skipTarget(56_000, 60_000, 10_000));
+        assertEquals(20_000, LocalMediaPlayerActivity.skipTarget(10_000, 60_000, 10_000));
+        assertEquals(0, LocalMediaPlayerActivity.skipTarget(-1, 0, -10_000));
+    }
+
+    @Test public void skipControlsDoNotOverflowLongDurations() {
+        assertEquals(Integer.MAX_VALUE, LocalMediaPlayerActivity.skipTarget(
+                Integer.MAX_VALUE - 5, Integer.MAX_VALUE, 10_000));
+        assertEquals(0, LocalMediaPlayerActivity.skipTarget(
+                0, Integer.MAX_VALUE, Integer.MIN_VALUE));
+        assertEquals(1_000, LocalMediaPlayerActivity.skipTarget(
+                Integer.MAX_VALUE, 1_000, 10_000));
+    }
+
     @Test public void favoritesMatchExactSavedFileAndRejectUnfinishedTasks() {
         final Context context = RuntimeEnvironment.getApplication();
         final DownloadService.Task video = saved(
