@@ -32,7 +32,7 @@ final class LibraryFilter {
         final String query = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
         final List<DownloadService.Task> result = new ArrayList<>();
         for (DownloadService.Task task : all) {
-            if (task == null || !task.state.finished()) continue;
+            if (task == null || task.state == null || !task.state.finished()) continue;
             if (!matchesCategory(task, category, favorites)) continue;
             final String title = task.title == null ? "" : task.title;
             final String artist = task.artist == null ? "" : task.artist;
@@ -71,8 +71,9 @@ final class LibraryFilter {
                 ? "" : task.mimeType.toLowerCase(Locale.ROOT);
         if (category == VIDEO) return mime.startsWith("video/");
         if (category == AUDIO) return mime.startsWith("audio/")
-                || task.spec.kind == DownloadService.Kind.MP3;
-        if (category == SUBTITLES) return task.spec.kind == DownloadService.Kind.SUBTITLE
+                || task.spec != null && task.spec.kind == DownloadService.Kind.MP3;
+        if (category == SUBTITLES) return task.spec != null
+                && task.spec.kind == DownloadService.Kind.SUBTITLE
                 || mime.startsWith("text/");
         return false;
     }
