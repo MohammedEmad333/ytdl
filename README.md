@@ -277,6 +277,14 @@ or SoundCloud. Their names and trademarks belong to their respective owners.
   new storage permissions, or changes to the download pipeline.
 - Adds JUnit regression coverage for seek boundaries and integer overflow.
 
+## NOVA 1.7.4: remember offline playback position
+
+- Reopen a saved local video or audio file at the last meaningful playback position.
+- Playback positions are stored on-device and bound to both queue task ID and the exact saved MediaStore URI, preventing position reuse for a replaced file.
+- Clear the saved position when playback finishes or reaches the end; ignore very short starts.
+- Restore transient rotation state without overwriting the saved position.
+- Unit tests cover resumed playback, stale URIs, unsaved media, and completion.
+
 ## Getting the APK
 
 **Actions** tab → newest run → wait ~4 minutes → scroll to **Artifacts** → download
