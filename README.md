@@ -257,6 +257,16 @@ or SoundCloud. Their names and trademarks belong to their respective owners.
 - Video playback still uses the existing native VideoView. This release does
   not add codec support beyond Android's available decoders.
 
+## NOVA 1.7.2: library and favorites resilience
+
+- The Library skips malformed task records with missing state instead of crashing.
+- Audio and subtitle filters tolerate missing metadata and preserve normal MIME categorization.
+- Favorites are limited to successfully completed, locally saved MediaStore items.
+  Remote URLs, untrusted content providers, and MediaStore URIs with query
+  parameters cannot be marked as favorites.
+- Regression tests cover missing state, missing/unknown media MIME types,
+  subtitles and invalid favorite target URIs. Existing offline playback remains intact.
+
 ## Getting the APK
 
 **Actions** tab → newest run → wait ~4 minutes → scroll to **Artifacts** → download
