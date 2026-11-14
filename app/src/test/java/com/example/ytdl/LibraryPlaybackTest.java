@@ -109,6 +109,24 @@ public final class LibraryPlaybackTest {
         assertFalse(LibraryFavorites.isFavorite(context, video));
     }
 
+    @Test public void favoritesRejectRemoteAndMalformedUris() {
+        final Context context = RuntimeEnvironment.getApplication();
+        final DownloadService.Task remote = saved("https://example.org/media.mp4", "video/mp4");
+        assertFalse(LibraryFavorites.toggle(context, remote));
+        assertFalse(LibraryFavorites.isFavorite(context, remote));
+        final DownloadService.Task wrongAuthority = saved(
+                "content://untrusted.provider/external/video/media/52", "video/mp4");
+        assertFalse(LibraryFavorites.toggle(context, wrongAuthority));
+        final DownloadService.Task query = saved(
+                "content://media/external/video/media/52?unknown=true", "video/mp4");
+        assertFalse(LibraryFavorites.toggle(context, query));
+        final DownloadService.Task valid = saved(
+                "content://media/external/downloads/52", "video/mp4");
+        assertTrue(LibraryFavorites.toggle(context, valid));
+        assertTrue(LibraryFavorites.isFavorite(context, valid));
+        assertFalse(LibraryFavorites.toggle(context, valid));
+    }
+
     @Test public void favoritesFilterRespectsSearchAndCompletion() {
         final DownloadService.Task favorite = saved(
                 "content://media/external/video/media/123", "video/mp4");
