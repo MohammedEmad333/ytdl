@@ -178,7 +178,7 @@ public final class LocalMediaPlayerActivity extends Activity {
         final MediaController controls = new MediaController(this);
         controls.setAnchorView(videoView);
         videoView.setMediaController(controls);
-        addSkipControls(root, false);
+        addSkipControls(root);
         videoView.setOnPreparedListener(player -> {
             prepared = true;
             setSkipEnabled(true);
@@ -241,7 +241,7 @@ public final class LocalMediaPlayerActivity extends Activity {
             }
         });
         panel.addView(audioSeek, new LinearLayout.LayoutParams(-1, Ui.dp(this, 52)));
-        addSkipControls(panel, true);
+        addSkipControls(panel);
 
         audioToggle = Ui.button(this, tr("Pause", "إيقاف مؤقت"), true);
         audioToggle.setEnabled(false);
@@ -293,7 +293,7 @@ public final class LocalMediaPlayerActivity extends Activity {
         }
     }
 
-    private void addSkipControls(LinearLayout parent, boolean audio) {
+    private void addSkipControls(LinearLayout parent) {
         final LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         skipBack = Ui.button(this, tr("−10 seconds", "رجوع ١٠ ثوانٍ"), false);
