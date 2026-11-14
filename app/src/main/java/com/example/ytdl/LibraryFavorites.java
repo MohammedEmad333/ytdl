@@ -2,6 +2,7 @@ package com.example.ytdl;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.net.Uri;
 
 /**
  * Local-only favorites. A record includes the exact saved MediaStore URI,
@@ -14,9 +15,14 @@ final class LibraryFavorites {
     private LibraryFavorites() {}
 
     static boolean eligible(DownloadService.Task task) {
-        return task != null && task.id > 0
-                && task.state == DownloadService.State.DONE
-                && task.outputUri != null && !task.outputUri.isEmpty();
+        if (task == null || task.id <= 0
+                || task.state != DownloadService.State.DONE
+                || task.outputUri == null || task.outputUri.isEmpty()) return false;
+        try {
+            return PendingMediaLedger.isOwnedItemUri(Uri.parse(task.outputUri));
+        } catch (RuntimeException malformed) {
+            return false;
+        }
     }
 
     private static SharedPreferences preferences(Context context) {
