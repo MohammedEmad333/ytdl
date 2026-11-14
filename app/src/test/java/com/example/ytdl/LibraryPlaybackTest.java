@@ -103,6 +103,57 @@ public final class LibraryPlaybackTest {
                 Integer.MAX_VALUE, 1_000, 10_000));
     }
 
+
+    @Test public void playbackPositionIsStoredOnlyForSavedLocalMedia() {
+        final Context context = RuntimeEnvironment.getApplication();
+        final DownloadService.Task item = saved(
+                "content://media/external/video/media/751", "video/mp4");
+        assertEquals(0, LocalMediaPlayerActivity.savedPosition(context, item));
+        LocalMediaPlayerActivity.rememberPosition(context, item, 42_000, 120_000);
+        assertEquals(42_000, LocalMediaPlayerActivity.savedPosition(context, item));
+
+        item.state = DownloadService.State.FAILED;
+        assertEquals(0, LocalMediaPlayerActivity.savedPosition(context, item));
+        LocalMediaPlayerActivity.rememberPosition(context, item, 90_000, 120_000);
+        item.state = DownloadService.State.DONE;
+        assertEquals(42_000, LocalMediaPlayerActivity.savedPosition(context, item));
+
+        item.outputUri = "https://example.org/media.mp4";
+        assertEquals(0, LocalMediaPlayerActivity.savedPosition(context, item));
+        LocalMediaPlayerActivity.rememberPosition(context, item, 30_000, 120_000);
+        item.outputUri = "content://media/external/video/media/751";
+        assertEquals(42_000, LocalMediaPlayerActivity.savedPosition(context, item));
+        LocalMediaPlayerActivity.rememberPosition(context, item, 0, 120_000);
+    }
+
+    @Test public void playbackPositionNeverLeaksToReplacedMedia() {
+        final Context context = RuntimeEnvironment.getApplication();
+        final DownloadService.Task item = saved(
+                "content://media/external/downloads/752", "audio/mp4");
+        LocalMediaPlayerActivity.rememberPosition(context, item, 27_000, 100_000);
+        assertEquals(27_000, LocalMediaPlayerActivity.savedPosition(context, item));
+        item.outputUri = "content://media/external/downloads/753";
+        assertEquals(0, LocalMediaPlayerActivity.savedPosition(context, item));
+        LocalMediaPlayerActivity.rememberPosition(context, item, 0, 100_000);
+        item.outputUri = "content://media/external/downloads/752";
+        assertEquals(0, LocalMediaPlayerActivity.savedPosition(context, item));
+    }
+
+    @Test public void playbackPositionIgnoresFirstSecondsAndCompletedFiles() {
+        final Context context = RuntimeEnvironment.getApplication();
+        final DownloadService.Task item = saved(
+                "content://media/external/audio/media/754", "audio/mpeg");
+        LocalMediaPlayerActivity.rememberPosition(context, item, 4_999, 100_000);
+        assertEquals(0, LocalMediaPlayerActivity.savedPosition(context, item));
+        LocalMediaPlayerActivity.rememberPosition(context, item, 12_000, 100_000);
+        assertEquals(12_000, LocalMediaPlayerActivity.savedPosition(context, item));
+        LocalMediaPlayerActivity.rememberPosition(context, item, 96_000, 100_000);
+        assertEquals(0, LocalMediaPlayerActivity.savedPosition(context, item));
+        LocalMediaPlayerActivity.rememberPosition(context, item, 25_000, 100_000);
+        LocalMediaPlayerActivity.rememberPosition(context, item, 0, 0);
+        assertEquals(0, LocalMediaPlayerActivity.savedPosition(context, item));
+    }
+
     @Test public void favoritesMatchExactSavedFileAndRejectUnfinishedTasks() {
         final Context context = RuntimeEnvironment.getApplication();
         final DownloadService.Task video = saved(
