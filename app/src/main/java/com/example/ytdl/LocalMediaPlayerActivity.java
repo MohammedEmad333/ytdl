@@ -34,6 +34,9 @@ public final class LocalMediaPlayerActivity extends Activity {
     private SeekBar audioSeek;
     private TextView audioTime;
     private Button audioToggle;
+    private Button skipBack;
+    private Button skipForward;
+    private static final int SKIP_MS = 10_000;
     private DownloadService.Task task;
     private int position;
     private boolean playWhenReady = true;
@@ -97,6 +100,12 @@ public final class LocalMediaPlayerActivity extends Activity {
         return hours > 0
                 ? String.format(Locale.US, "%d:%02d:%02d", hours, minutes, remaining)
                 : String.format(Locale.US, "%d:%02d", minutes, remaining);
+    }
+
+    /** Clamp seek targets without overflowing at the ends of long recordings. */
+    static int skipTarget(int currentMs, int durationMs, int deltaMs) {
+        final long target = (long) Math.max(0, currentMs) + deltaMs;
+        return (int) Math.max(0L, Math.min(Math.max(0, durationMs), target));
     }
 
     private String tr(String english, String arabic) {
@@ -169,8 +178,10 @@ public final class LocalMediaPlayerActivity extends Activity {
         final MediaController controls = new MediaController(this);
         controls.setAnchorView(videoView);
         videoView.setMediaController(controls);
+        addSkipControls(root);
         videoView.setOnPreparedListener(player -> {
             prepared = true;
+            setSkipEnabled(true);
             if (position > 0) videoView.seekTo(position);
             if (playWhenReady && foreground) videoView.start();
             status.setText(tr("Tap video for playback controls",
@@ -230,6 +241,7 @@ public final class LocalMediaPlayerActivity extends Activity {
             }
         });
         panel.addView(audioSeek, new LinearLayout.LayoutParams(-1, Ui.dp(this, 52)));
+        addSkipControls(panel);
 
         audioToggle = Ui.button(this, tr("Pause", "إيقاف مؤقت"), true);
         audioToggle.setEnabled(false);
@@ -252,6 +264,7 @@ public final class LocalMediaPlayerActivity extends Activity {
                 audioSeek.setMax(Math.max(1, duration));
                 audioSeek.setEnabled(duration > 0);
                 audioToggle.setEnabled(true);
+                setSkipEnabled(duration > 0);
                 if (position > 0) player.seekTo(Math.min(position, duration));
                 if (playWhenReady && foreground) player.start();
                 syncAudioButton();
@@ -276,6 +289,48 @@ public final class LocalMediaPlayerActivity extends Activity {
             });
             audioPlayer.prepareAsync();
         } catch (IOException | RuntimeException error) {
+            showPlaybackError();
+        }
+    }
+
+    private void addSkipControls(LinearLayout parent) {
+        final LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        skipBack = Ui.button(this, tr("−10 seconds", "رجوع ١٠ ثوانٍ"), false);
+        skipForward = Ui.button(this, tr("+10 seconds", "تقديم ١٠ ثوانٍ"), false);
+        skipBack.setContentDescription(tr("Rewind 10 seconds", "الرجوع عشر ثوانٍ"));
+        skipForward.setContentDescription(tr("Skip forward 10 seconds", "التقديم عشر ثوانٍ"));
+        skipBack.setEnabled(false);
+        skipForward.setEnabled(false);
+        skipBack.setOnClickListener(v -> skip(-SKIP_MS));
+        skipForward.setOnClickListener(v -> skip(SKIP_MS));
+        row.addView(skipBack, new LinearLayout.LayoutParams(0, Ui.dp(this, 48), 1f));
+        row.addView(skipForward, new LinearLayout.LayoutParams(0, Ui.dp(this, 48), 1f));
+        parent.addView(row, new LinearLayout.LayoutParams(-1, Ui.dp(this, 52)));
+    }
+
+    private void setSkipEnabled(boolean enabled) {
+        if (skipBack != null) skipBack.setEnabled(enabled);
+        if (skipForward != null) skipForward.setEnabled(enabled);
+    }
+
+    private void skip(int deltaMs) {
+        if (!prepared) return;
+        try {
+            if (audioPlayer != null) {
+                final int duration = audioPlayer.getDuration();
+                if (duration <= 0) return;
+                position = skipTarget(audioPlayer.getCurrentPosition(), duration, deltaMs);
+                audioPlayer.seekTo(position);
+                if (audioSeek != null) audioSeek.setProgress(position);
+                showAudioTime(position, duration);
+            } else if (videoView != null) {
+                final int duration = videoView.getDuration();
+                if (duration <= 0) return;
+                position = skipTarget(videoView.getCurrentPosition(), duration, deltaMs);
+                videoView.seekTo(position);
+            }
+        } catch (IllegalStateException error) {
             showPlaybackError();
         }
     }
@@ -315,6 +370,7 @@ public final class LocalMediaPlayerActivity extends Activity {
         ui.removeCallbacks(updateAudioProgress);
         if (audioToggle != null) audioToggle.setEnabled(false);
         if (audioSeek != null) audioSeek.setEnabled(false);
+        setSkipEnabled(false);
         if (status != null) status.setText(tr(
                 "NOVA cannot play this format. Try an external player.",
                 "تعذّر تشغيل هذا النوع في نوفا. جرّب مشغلًا خارجيًا."));

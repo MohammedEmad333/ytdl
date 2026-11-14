@@ -267,6 +267,16 @@ or SoundCloud. Their names and trademarks belong to their respective owners.
 - Regression tests cover missing state, missing/unknown media MIME types,
   subtitles and invalid favorite target URIs. Existing offline playback remains intact.
 
+## NOVA 1.7.3: offline player skip controls
+
+- Adds clearly labeled **10-second rewind and forward** buttons for both
+  downloaded videos and audio played inside NOVA.
+- Seeks stay inside the saved file's actual duration, even at start/end or on
+  unusually long recordings, and controls stay disabled until playback is ready.
+- Uses the existing MediaStore-owned saved media only. No internet streaming,
+  new storage permissions, or changes to the download pipeline.
+- Adds JUnit regression coverage for seek boundaries and integer overflow.
+
 ## Getting the APK
 
 **Actions** tab → newest run → wait ~4 minutes → scroll to **Artifacts** → download
