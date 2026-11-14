@@ -32,14 +32,24 @@ public final class LibraryPlaybackTest {
         final DownloadService.Task video = saved(
                 "content://media/external/video/media/123", "video/mp4");
         assertTrue(LocalMediaPlayerActivity.canPlay(video));
+        assertTrue(LocalMediaPlayerActivity.canPlay(saved(
+                "content://media/external/downloads/321", "video/mp4")));
         assertFalse(LocalMediaPlayerActivity.canPlay(saved(
                 "https://example.org/remote.mp4", "video/mp4")));
         assertFalse(LocalMediaPlayerActivity.canPlay(saved(
                 "content://other.example/file/12", "video/mp4")));
-        assertFalse(LocalMediaPlayerActivity.canPlay(saved(
+        assertTrue(LocalMediaPlayerActivity.canPlay(saved(
                 "content://media/external/audio/media/12", "audio/mpeg")));
+        assertTrue(LocalMediaPlayerActivity.canPlay(saved(
+                "content://media/external/downloads/12", "audio/mp4")));
         assertFalse(LocalMediaPlayerActivity.canPlay(saved(
                 "content://media/external/video/media/12", "audio/mpeg")));
+        assertFalse(LocalMediaPlayerActivity.canPlay(saved(
+                "content://media/external/audio/media/12", "video/mp4")));
+        assertFalse(LocalMediaPlayerActivity.canPlay(saved(
+                "content://media/external/downloads/12", "text/plain")));
+        assertFalse(LocalMediaPlayerActivity.canPlay(saved(
+                "content://media/external/downloads/12?unsafe=true", "video/mp4")));
         video.state = DownloadService.State.QUEUED;
         assertFalse(LocalMediaPlayerActivity.canPlay(video));
     }
@@ -56,6 +66,25 @@ public final class LibraryPlaybackTest {
                 LocalMediaPlayerActivity.EXTRA_TASK_ID, -1));
         assertNull(intent.getData());
         assertEquals(1, intent.getExtras().size());
+    }
+
+    @Test public void audioPlayerIntentCarriesNoUntrustedMediaUrl() {
+        final DownloadService.Task audio = saved(
+                "content://media/external/audio/media/123", "audio/mpeg");
+        final HistoryActivity source = Robolectric.buildActivity(HistoryActivity.class)
+                .create().start().resume().get();
+        final Intent intent = LocalMediaPlayerActivity.intentFor(source, audio);
+        assertEquals(audio.id, intent.getLongExtra(
+                LocalMediaPlayerActivity.EXTRA_TASK_ID, -1));
+        assertNull(intent.getData());
+        assertEquals(1, intent.getExtras().size());
+    }
+
+    @Test public void playbackTimeFormattingIsNonNegativeAndSupportsHours() {
+        assertEquals("0:00", LocalMediaPlayerActivity.formatTime(-1000));
+        assertEquals("0:09", LocalMediaPlayerActivity.formatTime(9_900));
+        assertEquals("1:05", LocalMediaPlayerActivity.formatTime(65_000));
+        assertEquals("1:01:01", LocalMediaPlayerActivity.formatTime(3_661_000));
     }
 
     @Test public void favoritesMatchExactSavedFileAndRejectUnfinishedTasks() {

@@ -238,6 +238,25 @@ or SoundCloud. Their names and trademarks belong to their respective owners.
   persistence and search/filter behavior. No new Android permissions, accounts,
   external SDKs or API subscriptions are required.
 
+## NOVA 1.7.1: offline audio and library playback compatibility
+
+- **Library > Play in NOVA** now opens locally saved audio as well as video,
+  including downloaded files stored under Android's MediaStore Downloads collection.
+  MP3s published in the audio collection and imported videos remain supported.
+- Offline audio player uses Android MediaPlayer with play/pause, seek bar, elapsed
+  time and duration, playback completion, lifecycle pause and external-player fallback.
+  Media files stay on-device; no external player or API subscription is required
+  for supported Android audio formats.
+- Playback accepts only completed NOVA queue records whose MediaStore URI is
+  an expected Downloads, Audio or Video item. Incoming intents carry only a task
+  ID, never an arbitrary remote URL or an untrusted storage path.
+- Media loading is asynchronous and no playback is started while the activity
+  is in the background. Unsupported formats offer an external-player fallback.
+- Regression tests cover audio and video eligibility, rejected remote URIs,
+  wrong media collections, intent safety and time labels.
+- Video playback still uses the existing native VideoView. This release does
+  not add codec support beyond Android's available decoders.
+
 ## Getting the APK
 
 **Actions** tab → newest run → wait ~4 minutes → scroll to **Artifacts** → download
