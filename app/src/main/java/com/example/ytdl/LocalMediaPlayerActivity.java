@@ -38,6 +38,7 @@ public final class LocalMediaPlayerActivity extends Activity {
     private int position;
     private boolean playWhenReady = true;
     private boolean prepared;
+    private boolean foreground;
     private TextView status;
     private Button external;
 
@@ -171,7 +172,7 @@ public final class LocalMediaPlayerActivity extends Activity {
         videoView.setOnPreparedListener(player -> {
             prepared = true;
             if (position > 0) videoView.seekTo(position);
-            if (playWhenReady) videoView.start();
+            if (playWhenReady && foreground) videoView.start();
             status.setText(tr("Tap video for playback controls",
                     "اضغط على الفيديو لإظهار أدوات التشغيل"));
         });
@@ -252,7 +253,7 @@ public final class LocalMediaPlayerActivity extends Activity {
                 audioSeek.setEnabled(duration > 0);
                 audioToggle.setEnabled(true);
                 if (position > 0) player.seekTo(Math.min(position, duration));
-                if (playWhenReady) player.start();
+                if (playWhenReady && foreground) player.start();
                 syncAudioButton();
                 showAudioTime(player.getCurrentPosition(), duration);
                 status.setText(tr("Playing an offline audio file",
@@ -334,6 +335,7 @@ public final class LocalMediaPlayerActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        foreground = true;
         if (prepared && playWhenReady) {
             if (videoView != null && !videoView.isPlaying()) videoView.start();
             if (audioPlayer != null) {
@@ -350,6 +352,7 @@ public final class LocalMediaPlayerActivity extends Activity {
     }
 
     @Override protected void onPause() {
+        foreground = false;
         ui.removeCallbacks(updateAudioProgress);
         if (videoView != null && prepared) {
             playWhenReady = videoView.isPlaying();
@@ -373,7 +376,7 @@ public final class LocalMediaPlayerActivity extends Activity {
         if (prepared) {
             if (videoView != null) {
                 position = videoView.getCurrentPosition();
-                playWhenReady = videoView.isPlaying();
+                if (videoView.isPlaying()) playWhenReady = true;
             } else if (audioPlayer != null) {
                 try {
                     position = audioPlayer.getCurrentPosition();
