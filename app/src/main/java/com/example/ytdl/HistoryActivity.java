@@ -23,6 +23,7 @@ import android.widget.Toast;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 
 /** NOVA library for completed and interrupted media downloads. */
 public final class HistoryActivity extends Activity {
@@ -35,6 +36,8 @@ public final class HistoryActivity extends Activity {
     private EditText search;
     private Spinner category;
     private Spinner sort;
+    private Spinner source;
+    private Set<Long> possibleDuplicates = Collections.emptySet();
 
     private String tr(String english, String arabic) {
         return NovaPreferences.text(this, english, arabic);
@@ -148,7 +151,8 @@ public final class HistoryActivity extends Activity {
                 tr("All files", "الكل"), tr("Videos", "فيديو"),
                 tr("Audio", "صوت"), tr("Subtitles", "ترجمة"),
                 tr("Needs attention", "تحتاج متابعة"),
-                tr("Favorites", "المفضلة")
+                tr("Favorites", "المفضلة"),
+                tr("Possible duplicates", "تكرارات محتملة")
         });
         sort = selector(new String[]{
                 tr("Newest first", "الأحدث أولاً"), tr("Oldest first", "الأقدم أولاً"),
@@ -162,6 +166,18 @@ public final class HistoryActivity extends Activity {
         final LinearLayout.LayoutParams toolParams = new LinearLayout.LayoutParams(-1, -2);
         toolParams.bottomMargin = Ui.dp(this, 12);
         root.addView(tools, toolParams);
+
+        source = selector(new String[]{
+                tr("Every source", "جميع المصادر"), tr("YouTube", "يوتيوب"),
+                tr("SoundCloud", "ساوندكلاود"), tr("X / Twitter", "إكس / تويتر"),
+                tr("Spotify matches", "مطابقات سبوتيفاي"),
+                tr("Local imports", "ملفات مستوردة"), tr("Other", "أخرى")
+        });
+        final LinearLayout.LayoutParams sourceParams =
+                new LinearLayout.LayoutParams(-1, Ui.dp(this, 49));
+        sourceParams.bottomMargin = Ui.dp(this, 12);
+        root.addView(source, sourceParams);
+
         final AdapterView.OnItemSelectedListener changed = new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view,
                                                   int position, long id) { refresh(); }
@@ -169,6 +185,7 @@ public final class HistoryActivity extends Activity {
         };
         category.setOnItemSelectedListener(changed);
         sort.setOnItemSelectedListener(changed);
+        source.setOnItemSelectedListener(changed);
 
         final ListView list = new ListView(this);
         adapter = new HistoryAdapter();
@@ -269,18 +286,28 @@ public final class HistoryActivity extends Activity {
             if (task.state == DownloadService.State.DONE) saved++;
             if (task.state == DownloadService.State.FAILED) failed++;
         }
+        possibleDuplicates = LibraryOrganizer.possibleDuplicateIds(all);
+        final int selectedCategory = category == null ? 0 : category.getSelectedItemPosition();
+        final int selectedSource = source == null ? 0 : source.getSelectedItemPosition();
         final List<DownloadService.Task> visible = LibraryFilter.select(all,
                 search == null ? "" : search.getText().toString(),
-                category == null ? 0 : category.getSelectedItemPosition(),
+                selectedCategory == 6 ? LibraryFilter.ALL : selectedCategory,
                 sort == null ? 0 : sort.getSelectedItemPosition(),
                 task -> LibraryFavorites.isFavorite(this, task));
         items.clear();
-        items.addAll(visible);
+        for (final DownloadService.Task task : visible) {
+            if (selectedSource != LibraryOrganizer.ALL_SOURCES
+                    && LibraryOrganizer.sourceOf(task) != selectedSource) continue;
+            if (selectedCategory == 6 && !possibleDuplicates.contains(task.id)) continue;
+            items.add(task);
+        }
         if (summary != null) {
             summary.setText(tr("✦  " + saved + " saved    ·    " + failed
-                            + " need attention\n" + items.size() + " visible items",
+                            + " need attention\n" + items.size() + " visible items · "
+                            + possibleDuplicates.size() + " possible duplicate entries",
                     "✦  " + saved + " محفوظ    ·    " + failed
-                            + " تحتاج متابعة\n" + items.size() + " عناصر ظاهرة"));
+                            + " تحتاج متابعة\n" + items.size() + " عناصر ظاهرة · "
+                            + possibleDuplicates.size() + " عناصر محتملة التكرار"));
         }
         if (adapter != null) adapter.notifyDataSetChanged();
     }
@@ -382,6 +409,9 @@ public final class HistoryActivity extends Activity {
 
             final TextView detail = Ui.sans(HistoryActivity.this, 12, Ui.MUTED);
             detail.setText(task.formatLabel()
+                    + (possibleDuplicates.contains(task.id)
+                    ? tr(" · Possible duplicate, review manually",
+                            " · تكرار محتمل، راجع الملف يدويًا") : "")
                     + (task.state == DownloadService.State.FAILED
                     ? tr(" · Tap to retry", " · اضغط لإعادة المحاولة") : ""));
             final LinearLayout.LayoutParams detailParams = new LinearLayout.LayoutParams(-1, -2);

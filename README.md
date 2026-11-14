@@ -285,6 +285,20 @@ or SoundCloud. Their names and trademarks belong to their respective owners.
 - Restore transient rotation state without overwriting the saved position.
 - Unit tests cover resumed playback, stale URIs, unsaved media, and completion.
 
+## NOVA 1.7.5: library organization and possible duplicates
+
+- Filter Library entries by source: YouTube, SoundCloud, X/Twitter, Spotify matches,
+  local video imports, or other sources.
+- Select **Possible duplicates** to review completed media with matching download
+  requests and different MediaStore URIs, or imported videos with matching name,
+  size and MIME type. Each candidate is labeled in the Library.
+- Duplicate detection uses local queue metadata only. **Candidates are not
+  byte-for-byte verified duplicates**. NOVA does not hash, read, delete, or
+  modify any saved media as part of this feature.
+- Failed, queued, unsafe-URI and unrecognized entries are excluded from duplicate
+  suggestions. Other library search, sorting, favorites and playback stay intact.
+- Robolectric tests cover source host classification and conservative duplicates.
+
 ## Getting the APK
 
 **Actions** tab → newest run → wait ~4 minutes → scroll to **Artifacts** → download
