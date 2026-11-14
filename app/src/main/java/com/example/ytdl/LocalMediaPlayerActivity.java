@@ -1,6 +1,8 @@
 package com.example.ytdl;
 
 import android.app.Activity;
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.Intent;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
@@ -27,6 +29,10 @@ public final class LocalMediaPlayerActivity extends Activity {
     static final String EXTRA_TASK_ID = "nova_player_task_id";
     private static final String POSITION = "video_position";
     private static final String WAS_PLAYING = "video_was_playing";
+    private static final String PROGRESS_PREFS = "nova_offline_playback_positions";
+    private static final String PROGRESS_PREFIX = "media-";
+    private static final int MIN_RESUME_MS = 5_000;
+    private static final int END_MARGIN_MS = 5_000;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private VideoView videoView;
@@ -108,6 +114,31 @@ public final class LocalMediaPlayerActivity extends Activity {
         return (int) Math.max(0L, Math.min(Math.max(0, durationMs), target));
     }
 
+    /** Positions are bound to both task ID and MediaStore URI, never remote URLs. */
+    static int savedPosition(Context context, DownloadService.Task item) {
+        if (!canPlay(item)) return 0;
+        final SharedPreferences prefs = context.getSharedPreferences(PROGRESS_PREFS, MODE_PRIVATE);
+        final String key = PROGRESS_PREFIX + item.id;
+        if (!item.outputUri.equals(prefs.getString(key + "-uri", null))) return 0;
+        return Math.max(0, prefs.getInt(key + "-ms", 0));
+    }
+
+    static void rememberPosition(Context context, DownloadService.Task item,
+                                 int currentMs, int durationMs) {
+        if (!canPlay(item)) return;
+        final String key = PROGRESS_PREFIX + item.id;
+        final SharedPreferences.Editor edit = context.getSharedPreferences(
+                PROGRESS_PREFS, MODE_PRIVATE).edit();
+        // Don't resume at the final frame or save insignificant progress.
+        if (currentMs < MIN_RESUME_MS || (durationMs > 0
+                && (long) currentMs >= (long) durationMs - END_MARGIN_MS)) {
+            edit.remove(key + "-uri").remove(key + "-ms").apply();
+        } else {
+            edit.putString(key + "-uri", item.outputUri)
+                    .putInt(key + "-ms", Math.max(0, currentMs)).apply();
+        }
+    }
+
     private String tr(String english, String arabic) {
         return NovaPreferences.text(this, english, arabic);
     }
@@ -128,6 +159,8 @@ public final class LocalMediaPlayerActivity extends Activity {
         if (savedInstanceState != null) {
             position = Math.max(0, savedInstanceState.getInt(POSITION, 0));
             playWhenReady = savedInstanceState.getBoolean(WAS_PLAYING, false);
+        } else {
+            position = savedPosition(this, task);
         }
 
         final LinearLayout root = new LinearLayout(this);
@@ -194,6 +227,7 @@ public final class LocalMediaPlayerActivity extends Activity {
         videoView.setOnCompletionListener(player -> {
             playWhenReady = false;
             position = 0;
+            rememberPosition(this, task, 0, 0);
             status.setText(tr("Playback finished", "انتهى التشغيل"));
         });
     }
@@ -277,6 +311,7 @@ public final class LocalMediaPlayerActivity extends Activity {
             audioPlayer.setOnCompletionListener(player -> {
                 playWhenReady = false;
                 position = 0;
+                rememberPosition(this, task, 0, 0);
                 player.seekTo(0);
                 syncAudioButton();
                 showAudioTime(0, player.getDuration());
@@ -413,12 +448,14 @@ public final class LocalMediaPlayerActivity extends Activity {
         if (videoView != null && prepared) {
             playWhenReady = videoView.isPlaying();
             position = videoView.getCurrentPosition();
+            rememberPosition(this, task, position, videoView.getDuration());
             videoView.pause();
         }
         if (audioPlayer != null && prepared) {
             try {
                 playWhenReady = audioPlayer.isPlaying();
                 position = audioPlayer.getCurrentPosition();
+                rememberPosition(this, task, position, audioPlayer.getDuration());
                 if (playWhenReady) audioPlayer.pause();
                 syncAudioButton();
             } catch (IllegalStateException ignored) {
